@@ -19,6 +19,10 @@ Grab the IP address from the hypervisor:
 IP: 192.168.5.111
 Hostname: rhem.hex.blasco.id.au
 
+Pi-hole local DNS record (`rhem.hex.blasco.id.au` → `192.168.5.111`):
+
+![Pi-hole local DNS record for rhem](images/pihole-local-dns-rhem.png)
+
 ## RHEL registration and basic config
 
 ```bash
