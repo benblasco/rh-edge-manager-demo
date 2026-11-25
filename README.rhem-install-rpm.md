@@ -2,6 +2,8 @@
 
 Connected RPM control plane on RHEL 10 for host `rhem.hex.blasco.id.au`. Official guide: [Install Red Hat Edge Manager on RHEL 1.4](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_install_rhem_on_rhel).
 
+**Automated install:** same steps via Ansible — see [ansible/README.md](ansible/README.md).
+
 ## Prerequisites
 
 - RHEL 10 minimal, sudo, SSH, Podman, active Edge Manager subscription
@@ -9,10 +11,11 @@ Connected RPM control plane on RHEL 10 for host `rhem.hex.blasco.id.au`. Officia
 - DNS `A`/`AAAA` for `rhem.hex.blasco.id.au` → this host
 - Firewall: TCP **443** (UI/API), **7443** (enrolled devices)
 - Baseline (~100 devices): 4 vCPU, 4 GB RAM, 70 GB disk, internet
+- `registry.redhat.io` credentials for `podman login`
 
 See [Install the RHEM RPM package](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel) and [Network ports](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/discover-con_rhem_standalone_gateway).
 
-## Host preparation
+## Host preparation (tag: `prepare`)
 
 ```bash
 sudo hostnamectl set-hostname rhem.hex.blasco.id.au
@@ -20,21 +23,17 @@ getenforce
 podman --version
 ```
 
-## DNS and TLS
+Open gateway ports in firewalld:
 
-Configure before starting services. Details: [Plan DNS and TLS](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_rhem_gateway_dns_and_certs).
-
-`/etc/flightctl/service-config.yaml`:
-
-```yaml
-global:
-  baseDomain: rhem.hex.blasco.id.au
-  generateCertificates: builtin
+```bash
+sudo firewall-cmd --permanent --add-port=443/tcp
+sudo firewall-cmd --permanent --add-port=7443/tcp
+sudo firewall-cmd --reload
 ```
 
-Distribute `/etc/flightctl/pki/ca.crt` to admin clients that must trust the builtin CA.
+Plan DNS and TLS before clients connect. Details: [Plan DNS and TLS](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_rhem_gateway_dns_and_certs).
 
-## Install packages
+## Install packages (tag: `install`)
 
 [Install the RHEM RPM package](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel).
 
@@ -44,7 +43,34 @@ sudo subscription-manager repos --enable edge-manager-1.4-for-rhel-10-x86_64-rpm
 sudo dnf install -y flightctl-services
 ```
 
-## Start and verify services
+## DNS and TLS — service configuration (tag: `install`, before first start)
+
+Configure **after** `flightctl-services` is installed (the RPM ships a full default at `/etc/flightctl/service-config.yaml.rpmnew`).
+
+**Do not** replace `/etc/flightctl/service-config.yaml` with a short snippet only. Services render configs from the **full** file; a minimal file breaks API, PAM issuer, and gateway startup.
+
+Seed from the package default and set your FQDN:
+
+```bash
+sudo cp /etc/flightctl/service-config.yaml.rpmnew /etc/flightctl/service-config.yaml
+sudo sed -i 's/^  baseDomain:.*/  baseDomain: rhem.hex.blasco.id.au/' /etc/flightctl/service-config.yaml
+```
+
+Confirm OIDC/PAM auth is enabled (present in `.rpmnew`):
+
+```yaml
+global:
+  auth:
+    type: oidc
+```
+
+Other keys you typically leave at RPM defaults: `generateCertificates: builtin`, `global.auth.oidc`, `global.auth.pamOidcIssuer`, and per-service sections.
+
+Distribute `/etc/flightctl/pki/ca.crt` to admin clients that must trust the builtin CA.
+
+## Start and verify services (tag: `install`)
+
+Apply service config **before** the first start:
 
 ```bash
 sudo systemctl enable --now flightctl.target
@@ -56,9 +82,21 @@ Troubleshoot: `sudo journalctl -u <unit> -b --no-pager`
 
 Web UI (after auth): `https://rhem.hex.blasco.id.au/`
 
-## Authentication credentials
+### If the gateway or API keeps restarting
 
-RHEM sign-in uses the **PAM issuer** container, not RHEL host accounts in `/etc/passwd`. Create users **inside** `flightctl-pam-issuer` with `podman exec`. Group `flightctl-admin` grants global administrator. See [Configure authentication credentials](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel).
+Symptoms: `flightctl-gateway.service` stuck in `activating`, nothing listening on 443/7443, journal mentions `global.auth.type: Required value` or template render errors.
+
+```bash
+sudo cp /etc/flightctl/service-config.yaml.rpmnew /etc/flightctl/service-config.yaml
+sudo sed -i 's/^  baseDomain:.*/  baseDomain: rhem.hex.blasco.id.au/' /etc/flightctl/service-config.yaml
+sudo systemctl restart flightctl.target
+```
+
+Do **not** run `flightctl-standalone render quadlets` on an RPM-only host; it expects a source tree under `deploy/podman/`.
+
+## Authentication credentials (tag: `pam`)
+
+RHEM sign-in uses the **PAM issuer** container, not RHEL host accounts in `/etc/passwd`. Create users **inside** `flightctl-pam-issuer` with `podman exec` after `flightctl-pam-issuer` is running. Group `flightctl-admin` grants global administrator. See [Configure authentication credentials](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel).
 
 Lab admin: username `user1`, password `redhat123`.
 
@@ -70,7 +108,7 @@ sudo podman exec flightctl-pam-issuer useradd -m --groups flightctl-admin -p "$H
 
 Prefer interactive hashing in non-lab environments: `mkpasswd -m sha-512` (package `whois`) or `openssl passwd -6`.
 
-## Flight Control CLI
+## Flight Control CLI (tag: `cli`)
 
 ```bash
 sudo dnf install -y flightctl-cli
@@ -95,11 +133,14 @@ flightctl get enrollmentrequests --field-selector="status.approval.approved != t
 flightctl approve enrollmentrequest/<name>
 ```
 
-## Verification
+Enrollment approval is manual; it is not part of the Ansible install playbook.
+
+## Verification (tag: `verify`)
 
 ```bash
 dig +short rhem.hex.blasco.id.au
 sudo ss -tlnp | grep -E ':443|:7443'
+sudo systemctl is-active flightctl-gateway.service
 flightctl version
 getenforce
 ```
@@ -110,5 +151,6 @@ getenforce
 - [Install the RHEM RPM package](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel)
 - [Plan DNS and TLS](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_rhem_gateway_dns_and_certs)
 - [HTTPS gateway](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/discover-con_rhem_standalone_gateway)
+- [Ansible install (this repo)](ansible/README.md)
 
 Disconnected/air-gapped install is out of scope for this document.

@@ -1,0 +1,6 @@
+---
+# Install: ansible-galaxy collection install -r ansible/requirements.yml
+collections:
+  - name: ansible.posix
+  - name: community.general
+  - name: containers.podman

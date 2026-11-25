@@ -1,0 +1,358 @@
+---
+# Connected RPM install for Red Hat Edge Manager on RHEL 10.
+# Manual prerequisites (not automated): DNS A/AAAA, Edge Manager subscription, registry.redhat.io account.
+# Secrets: inventory/group_vars/rhem_servers/vault.yml (see vault.yml.example)
+
+- name: Install Red Hat Edge Manager (RPM / flightctl-services)
+  hosts: rhem_servers
+  become: true
+  gather_facts: true
+
+  handlers:
+    - name: Restart flightctl target after service config change
+      ansible.builtin.systemd:
+        name: "{{ rhem_systemd_target }}"
+        state: restarted
+        daemon_reload: true
+
+  pre_tasks:
+    - name: Require vault secrets
+      ansible.builtin.assert:
+        that:
+          - rhem_pam_password is defined
+          - rhem_pam_password | length > 0
+          - rhem_pam_password != 'CHANGEME'
+          - rhem_registry_username is defined
+          - rhem_registry_password is defined
+          - rhem_registry_username != 'CHANGEME'
+          - rhem_registry_password != 'CHANGEME'
+        fail_msg: >-
+          Copy inventory/group_vars/rhem_servers/vault.yml.example to vault.yml,
+          set secrets, then ansible-vault encrypt vault.yml (or place an unencrypted vault.yml for lab only).
+      tags: [always]
+
+  tasks:
+    - name: Assert RHEL major version
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'RedHat'
+          - ansible_distribution_major_version == rhem_required_distribution_major_version
+        fail_msg: "This playbook targets RHEL {{ rhem_required_distribution_major_version }} (Edge Manager 1.4 RPM install)."
+      tags: [always, prepare]
+
+    - name: Ensure Podman is installed
+      ansible.builtin.package:
+        name: podman
+        state: present
+      tags: [prepare]
+
+    - name: Set FQDN hostname
+      ansible.builtin.hostname:
+        name: "{{ rhem_fqdn }}"
+        use: systemd
+      tags: [prepare]
+
+    - name: Open firewall ports for RHEM gateway
+      ansible.posix.firewalld:
+        port: "{{ item }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ rhem_firewalld_tcp_ports }}"
+      tags: [prepare]
+
+    - name: Ensure flightctl config directory exists
+      ansible.builtin.file:
+        path: "{{ rhem_service_config_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      tags: [prepare]
+
+    - name: Enable Edge Manager content repository
+      community.general.rhsm_repository:
+        name: "{{ rhem_rhsm_repo_id }}"
+        state: enabled
+      tags: [install]
+
+    - name: Log in to Red Hat container registry
+      containers.podman.podman_login:
+        registry: "{{ rhem_registry_url }}"
+        username: "{{ rhem_registry_username }}"
+        password: "{{ rhem_registry_password }}"
+      no_log: true
+      tags: [install]
+
+    - name: Install flightctl-services package
+      ansible.builtin.dnf:
+        name: "{{ rhem_package_services }}"
+        state: present
+      tags: [install]
+
+    - name: Check package default service-config seed exists
+      ansible.builtin.stat:
+        path: "{{ rhem_service_config_package_seed }}"
+      register: rhem_service_config_seed_stat
+      tags: [prepare, install]
+
+    - name: Require package service-config seed file
+      ansible.builtin.assert:
+        that:
+          - rhem_service_config_seed_stat.stat.exists
+        fail_msg: >-
+          {{ rhem_service_config_package_seed }} not found. Install {{ rhem_package_services }} before configuring services.
+      tags: [prepare, install]
+
+    - name: Deploy flightctl service configuration from package defaults (before first service start)
+      ansible.builtin.copy:
+        src: "{{ rhem_service_config_package_seed }}"
+        dest: "{{ rhem_service_config_path }}"
+        remote_src: true
+        owner: "{{ rhem_service_config_owner }}"
+        group: "{{ rhem_service_config_group }}"
+        mode: "{{ rhem_service_config_mode }}"
+        backup: true
+      notify: Restart flightctl target after service config change
+      tags: [prepare, install]
+
+    - name: Set base domain in flightctl service configuration
+      ansible.builtin.replace:
+        path: "{{ rhem_service_config_path }}"
+        regexp: '^  baseDomain:\s*.*$'
+        replace: '  baseDomain: {{ rhem_base_domain }}'
+      notify: Restart flightctl target after service config change
+      tags: [prepare, install]
+
+    - name: Render flightctl quadlets from service configuration
+      ansible.builtin.command:
+        cmd: /usr/bin/flightctl-standalone render quadlets --config {{ rhem_service_config_path }}
+      register: rhem_render_quadlets
+      changed_when: rhem_render_quadlets.rc == 0
+      when: rhem_render_quadlets_on_config | bool
+      notify: Restart flightctl target after service config change
+      tags: [prepare, install]
+
+    - name: Apply service configuration handlers before starting stack
+      ansible.builtin.meta: flush_handlers
+      tags: [install]
+
+    - name: Enable and start flightctl target
+      ansible.builtin.systemd:
+        name: "{{ rhem_systemd_target }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      tags: [install]
+
+    - name: Wait for gateway HTTPS port
+      ansible.builtin.wait_for:
+        port: 443
+        host: 127.0.0.1
+        timeout: 300
+      tags: [install]
+
+    - name: Wait for device enrollment port
+      ansible.builtin.wait_for:
+        port: 7443
+        host: 127.0.0.1
+        timeout: 300
+      tags: [install]
+
+    - name: Wait until flightctl-gateway service is active
+      ansible.builtin.command:
+        cmd: systemctl is-active {{ rhem_gateway_service }}
+      register: rhem_gateway_active
+      until: rhem_gateway_active.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+      tags: [install]
+
+    - name: Wait until PAM issuer container is running
+      containers.podman.podman_container_info:
+        name: "{{ rhem_pam_container_name }}"
+      register: rhem_pam_container_info
+      changed_when: false
+      until:
+        - rhem_pam_container_info.containers | length > 0
+        - rhem_pam_container_info.containers[0].State.Running | default(false)
+      retries: 30
+      delay: 10
+      tags: [pam]
+
+    - name: Check for PAM admin group inside issuer container
+      containers.podman.podman_container_exec:
+        name: "{{ rhem_pam_container_name }}"
+        argv:
+          - getent
+          - group
+          - "{{ rhem_pam_admin_group }}"
+      register: rhem_pam_group_check
+      failed_when: false
+      changed_when: false
+      tags: [pam]
+
+    - name: Create PAM admin group inside issuer container
+      containers.podman.podman_container_exec:
+        name: "{{ rhem_pam_container_name }}"
+        argv:
+          - groupadd
+          - "{{ rhem_pam_admin_group }}"
+      when: rhem_pam_group_check.rc != 0
+      tags: [pam]
+
+    - name: Check for PAM admin user inside issuer container
+      containers.podman.podman_container_exec:
+        name: "{{ rhem_pam_container_name }}"
+        argv:
+          - getent
+          - passwd
+          - "{{ rhem_pam_username }}"
+      register: rhem_pam_user_check
+      failed_when: false
+      changed_when: false
+      tags: [pam]
+
+    - name: Hash PAM admin password on RHEL host (sha-512 crypt)
+      ansible.builtin.shell:
+        cmd: openssl passwd -6
+        stdin: "{{ rhem_pam_password }}"
+      register: rhem_pam_password_hash
+      changed_when: false
+      no_log: true
+      when: rhem_pam_user_check.rc != 0
+      tags: [pam]
+
+    - name: Create PAM admin user inside issuer container
+      containers.podman.podman_container_exec:
+        name: "{{ rhem_pam_container_name }}"
+        argv:
+          - useradd
+          - -m
+          - --groups
+          - "{{ rhem_pam_admin_group }}"
+          - -p
+          - "{{ rhem_pam_password_hash.stdout | trim }}"
+          - "{{ rhem_pam_username }}"
+      when: rhem_pam_user_check.rc != 0
+      no_log: true
+      tags: [pam]
+
+    - name: Install flightctl CLI on RHEM host
+      ansible.builtin.dnf:
+        name: "{{ rhem_package_cli }}"
+        state: present
+      tags: [cli]
+
+    - name: Install builtin CA into host trust store
+      when: rhem_install_local_ca_trust | bool
+      block:
+        - name: Copy flightctl CA into trust anchors
+          ansible.builtin.copy:
+            src: /etc/flightctl/pki/ca.crt
+            dest: /etc/pki/ca-trust/source/anchors/flightctl-rhem-ca.crt
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0644"
+        - name: Update system CA trust
+          ansible.builtin.command:
+            cmd: update-ca-trust extract
+          changed_when: true
+      tags: [cli]
+
+    - name: Check for existing flightctl client configuration
+      ansible.builtin.stat:
+        path: "{{ rhem_flightctl_client_config }}"
+      register: rhem_flightctl_client_stat
+      when: rhem_flightctl_login_enabled | bool
+      tags: [cli]
+
+    - name: Build flightctl login argument list
+      ansible.builtin.set_fact:
+        rhem_flightctl_login_argv: >-
+          {{ _rhem_flightctl_login_base + (['--insecure-skip-tls-verify'] if rhem_flightctl_login_insecure_tls | bool else []) }}
+      vars:
+        _rhem_flightctl_login_base:
+          - flightctl
+          - login
+          - "https://{{ rhem_fqdn }}"
+          - --username
+          - "{{ rhem_pam_username }}"
+          - --password
+          - "{{ rhem_pam_password }}"
+      when: rhem_flightctl_login_enabled | bool
+      no_log: true
+      tags: [cli]
+
+    - name: Log in flightctl CLI on RHEM host
+      ansible.builtin.command:
+        argv: "{{ rhem_flightctl_login_argv }}"
+      when:
+        - rhem_flightctl_login_enabled | bool
+        - not rhem_flightctl_client_stat.stat.exists | default(false)
+      no_log: true
+      tags: [cli]
+
+    - name: Query SELinux mode
+      ansible.builtin.command:
+        cmd: getenforce
+      register: rhem_getenforce
+      changed_when: false
+      tags: [verify]
+
+    - name: Assert SELinux is enforcing when required
+      ansible.builtin.assert:
+        that:
+          - not rhem_verify_selinux_enforcing | bool or rhem_getenforce.stdout == 'Enforcing'
+        fail_msg: "SELinux is {{ rhem_getenforce.stdout }}; this demo expects Enforcing (do not use setenforce 0)."
+      tags: [verify]
+
+    - name: Assert flightctl-gateway is active
+      ansible.builtin.systemd:
+        name: "{{ rhem_gateway_service }}"
+        state: started
+      tags: [verify]
+
+    - name: Assert RHEM ports are listening locally
+      ansible.builtin.wait_for:
+        port: "{{ item }}"
+        host: 127.0.0.1
+        timeout: 30
+      loop: "{{ rhem_firewalld_tcp_ports }}"
+      tags: [verify]
+
+    - name: Verify flightctl CLI is available
+      ansible.builtin.command:
+        cmd: flightctl version
+      register: rhem_flightctl_version
+      changed_when: false
+      tags: [verify]
+
+    - name: Resolve RHEM FQDN from controller (optional)
+      ansible.builtin.command:
+        cmd: dig +short {{ rhem_fqdn }}
+      register: rhem_dig_short
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      failed_when: false
+      when: rhem_verify_dns | bool
+      tags: [verify]
+
+    - name: Assert FQDN has DNS records when verification enabled
+      ansible.builtin.assert:
+        that:
+          - rhem_dig_short.stdout | trim | length > 0
+        fail_msg: "No A/AAAA records for {{ rhem_fqdn }}; create DNS before using the gateway URL."
+      when: rhem_verify_dns | bool
+      tags: [verify]
+
+    - name: Summarise install result
+      ansible.builtin.debug:
+        msg:
+          - "Web UI: https://{{ rhem_fqdn }}/"
+          - "Sign-in user: {{ rhem_pam_username }} (PAM issuer container, not host passwd)"
+          - "flightctl: {{ rhem_flightctl_version.stdout | default('not installed') }}"
+      tags: [verify]

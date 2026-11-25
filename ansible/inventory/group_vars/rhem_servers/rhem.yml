@@ -1,0 +1,39 @@
+---
+# Non-secret defaults for connected RPM install (demo/lab).
+# Secrets: copy vault.yml.example to vault.yml and ansible-vault encrypt vault.yml
+
+rhem_fqdn: rhem.hex.blasco.id.au
+rhem_base_domain: "{{ rhem_fqdn }}"
+
+rhem_pam_username: user1
+rhem_pam_admin_group: flightctl-admin
+rhem_pam_container_name: flightctl-pam-issuer
+
+rhem_rhsm_repo_id: edge-manager-1.4-for-rhel-10-x86_64-rpms
+rhem_package_services: flightctl-services
+rhem_package_cli: flightctl-cli
+rhem_systemd_target: flightctl.target
+rhem_gateway_service: flightctl-gateway.service
+
+rhem_firewalld_tcp_ports:
+  - 443
+  - 7443
+
+rhem_registry_url: registry.redhat.io
+
+rhem_service_config_path: /etc/flightctl/service-config.yaml
+rhem_service_config_package_seed: /etc/flightctl/service-config.yaml.rpmnew
+rhem_render_quadlets_on_config: false
+rhem_service_config_owner: root
+rhem_service_config_group: root
+rhem_service_config_mode: "0644"
+
+rhem_flightctl_login_enabled: true
+rhem_flightctl_login_insecure_tls: true
+rhem_install_local_ca_trust: false
+rhem_flightctl_client_config: /root/.config/flightctl/client.yaml
+
+rhem_verify_dns: true
+rhem_verify_selinux_enforcing: true
+
+rhem_required_distribution_major_version: "10"

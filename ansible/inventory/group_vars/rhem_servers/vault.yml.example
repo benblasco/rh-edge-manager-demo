@@ -1,0 +1,7 @@
+---
+# Copy to vault.yml, set values, then: ansible-vault encrypt inventory/group_vars/rhem_servers/vault.yml
+# ansible-playbook playbooks/rhem-install-rpm.yml --ask-vault-pass
+
+rhem_pam_password: CHANGEME
+rhem_registry_username: CHANGEME
+rhem_registry_password: CHANGEME
