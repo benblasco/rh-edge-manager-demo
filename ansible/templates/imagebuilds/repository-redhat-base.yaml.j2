@@ -1,0 +1,17 @@
+apiVersion: flightctl.io/v1beta1
+kind: Repository
+metadata:
+  name: {{ rhem_oci_repo_redhat_name }}
+spec:
+  type: oci
+  registry: {{ rhem_registry_url }}
+  scheme: https
+  accessMode: Read
+  ociAuth:
+    authType: docker
+    username: {{ rhem_registry_username | to_json }}
+    password: {{ rhem_registry_password | to_json }}
+  baseImages:
+    - imageName: {{ rhem_bootc_image_name }}
+      tags:
+        - {{ rhem_bootc_image_tag | to_json }}

@@ -1,0 +1,13 @@
+# Manual build example — Ansible renders from ansible/templates/advancedbuilds/Containerfile.j2
+# See README.image-builds-advanced.md
+FROM registry.redhat.io/rhel10/rhel-bootc:1795492183
+
+RUN dnf config-manager --set-enabled edge-manager-1.4-for-rhel-10-x86_64-rpms && \
+    dnf -y install flightctl-agent tmux bash-completion cockpit && \
+    dnf -y clean all && \
+    systemctl enable flightctl-agent.service && \
+    systemctl enable cockpit.socket && \
+    systemctl mask bootc-fetch-apply-updates.timer
+
+# After: flightctl certificate request ... > config.yaml (early binding)
+# ADD config.yaml /etc/flightctl/

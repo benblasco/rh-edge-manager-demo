@@ -1,0 +1,30 @@
+---
+# Advanced bootc image build (Containerfile + podman). See README.image-builds-advanced.md.
+# Reuses rhem_bootc_* and rhem_built_registry_* from rhem_imagebuilds.yml (load both group_var files).
+
+rhem_advanced_build_name: advancedbuild1
+rhem_advanced_build_dir: /etc/flightctl/advancedbuilds/advancedbuild1
+rhem_advanced_build_dir_mode: "0700"
+
+rhem_advanced_dest_image: advancedbuild1
+rhem_advanced_dest_tag: latest
+rhem_advanced_oci_image_repo: "{{ rhem_built_registry_host }}/{{ rhem_advanced_dest_image }}"
+
+# early: embed flightctl config.yaml in the image (same approach as testbuild1)
+rhem_advanced_binding: early
+rhem_advanced_enrollment_cert_expiration: 365d
+rhem_advanced_regenerate_enrollment_cert: false
+
+rhem_advanced_extra_packages:
+  - tmux
+  - bash-completion
+  - cockpit
+
+rhem_advanced_registries_dropin: 998-micro-lan-lab.conf
+rhem_advanced_registries_dropin_dir: /etc/containers/registries.conf.d
+
+# Podman build can take 30+ minutes
+rhem_advanced_apply_build: true
+rhem_advanced_apply_push: true
+rhem_advanced_build_async_timeout: 7200
+rhem_advanced_build_poll_interval: 30

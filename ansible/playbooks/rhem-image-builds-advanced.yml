@@ -1,0 +1,263 @@
+---
+# Advanced bootc image: Containerfile, early binding, podman build/push (README.image-builds-advanced.md).
+# Requires rhem-install-rpm.yml on the same inventory (entitlement, podman login registry.redhat.io).
+# Optional: rhem-image-builds.yml --tags repositories (OCI Repository for micro.lan-built).
+
+- name: Build and push advanced RHEM bootc image
+  hosts: rhem_servers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Require vault secrets for registry and flightctl CLI
+      ansible.builtin.assert:
+        that:
+          - rhem_registry_username is defined
+          - rhem_registry_password is defined
+          - rhem_registry_username != 'CHANGEME'
+          - rhem_registry_password != 'CHANGEME'
+          - (rhem_advanced_binding != 'early')
+            or (
+              rhem_flightctl_login_enabled | bool
+              and rhem_pam_password is defined
+              and rhem_pam_password | length > 0
+              and rhem_pam_password != 'CHANGEME'
+            )
+        fail_msg: >-
+          Set registry credentials in vault.yml. Early binding also requires
+          rhem_pam_password for flightctl certificate request.
+      tags: [always]
+
+    - name: Assert flightctl CLI package is installed
+      ansible.builtin.command:
+        cmd: rpm -q {{ rhem_package_cli }}
+      register: rhem_cli_rpm
+      changed_when: false
+      failed_when: rhem_cli_rpm.rc != 0
+      tags: [always]
+
+    - name: Assert podman and skopeo are installed
+      ansible.builtin.command:
+        cmd: rpm -q podman skopeo
+      register: rhem_container_tools_rpm
+      changed_when: false
+      failed_when: rhem_container_tools_rpm.rc != 0
+      tags: [always, build]
+
+    - name: Enable Edge Manager content repository for image build
+      community.general.rhsm_repository:
+        name: "{{ rhem_rhsm_repo_id }}"
+        state: enabled
+      tags: [prereq, build]
+
+    - name: Ensure Red Hat container registry login for root
+      containers.podman.podman_login:
+        registry: "{{ rhem_registry_url }}"
+        username: "{{ rhem_registry_username }}"
+        password: "{{ rhem_registry_password }}"
+      no_log: true
+      tags: [prereq, build]
+
+  tasks:
+    - name: Ensure advanced build context directory exists
+      ansible.builtin.file:
+        path: "{{ rhem_advanced_build_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ rhem_advanced_build_dir_mode }}"
+      tags: [context, build]
+
+    - name: Configure insecure lab push registry for Podman when using HTTPS skip-TLS
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/advancedbuilds/micro-lan-registry.conf.j2"
+        dest: "{{ rhem_advanced_registries_dropin_dir }}/{{ rhem_advanced_registries_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - rhem_built_registry_scheme == 'https'
+        - rhem_built_registry_skip_tls_verify | bool
+      tags: [prereq, build, push]
+
+    - name: Check for existing flightctl client configuration
+      ansible.builtin.stat:
+        path: "{{ rhem_flightctl_client_config }}"
+      register: rhem_flightctl_client_stat
+      when: rhem_flightctl_login_enabled | bool
+      tags: [earlybinding, build]
+
+    - name: Build flightctl login argument list
+      ansible.builtin.set_fact:
+        rhem_flightctl_login_argv: >-
+          {{ _rhem_flightctl_login_base + (['--insecure-skip-tls-verify'] if rhem_flightctl_login_insecure_tls | bool else []) }}
+      vars:
+        _rhem_flightctl_login_base:
+          - flightctl
+          - login
+          - "https://{{ rhem_fqdn }}"
+          - --username
+          - "{{ rhem_pam_username }}"
+          - --password
+          - "{{ rhem_pam_password }}"
+      when: rhem_flightctl_login_enabled | bool
+      no_log: true
+      tags: [earlybinding, build]
+
+    - name: Log in flightctl CLI when client config is missing
+      ansible.builtin.command:
+        argv: "{{ rhem_flightctl_login_argv }}"
+      when:
+        - rhem_flightctl_login_enabled | bool
+        - not rhem_flightctl_client_stat.stat.exists | default(false)
+      no_log: true
+      tags: [earlybinding, build]
+
+    - name: Check for existing enrollment config.yaml
+      ansible.builtin.stat:
+        path: "{{ rhem_advanced_build_dir }}/config.yaml"
+      register: rhem_advanced_config_stat
+      when: rhem_advanced_binding == 'early'
+      tags: [earlybinding, build]
+
+    - name: Request enrollment certificate for early binding
+      ansible.builtin.shell:
+        cmd: >-
+          flightctl certificate request
+          --signer=enrollment
+          --expiration={{ rhem_advanced_enrollment_cert_expiration }}
+          --output=embedded
+          > {{ rhem_advanced_build_dir }}/config.yaml
+        creates: "{{ rhem_advanced_build_dir }}/config.yaml"
+      when:
+        - rhem_advanced_binding == 'early'
+        - not rhem_advanced_regenerate_enrollment_cert | bool
+      no_log: true
+      tags: [earlybinding, build]
+
+    - name: Renew enrollment certificate for early binding
+      ansible.builtin.shell:
+        cmd: >-
+          flightctl certificate request
+          --signer=enrollment
+          --expiration={{ rhem_advanced_enrollment_cert_expiration }}
+          --output=embedded
+          > {{ rhem_advanced_build_dir }}/config.yaml
+      when:
+        - rhem_advanced_binding == 'early'
+        - rhem_advanced_regenerate_enrollment_cert | bool
+      no_log: true
+      tags: [earlybinding, build]
+
+    - name: Render Containerfile for advanced build
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/advancedbuilds/Containerfile.j2"
+        dest: "{{ rhem_advanced_build_dir }}/Containerfile"
+        owner: root
+        group: root
+        mode: "0644"
+      tags: [context, build]
+
+    - name: Log in to built-image registry when auth is configured
+      containers.podman.podman_login:
+        registry: "{{ rhem_built_registry_host }}"
+        username: "{{ rhem_built_registry_username }}"
+        password: "{{ rhem_built_registry_password }}"
+        tlsverify: "{{ not (rhem_built_registry_skip_tls_verify | default(false) | bool) }}"
+      no_log: true
+      when:
+        - rhem_built_registry_username | default('') | length > 0
+        - rhem_built_registry_password | default('') | length > 0
+      tags: [push]
+
+    - name: Build advanced bootc image with podman
+      ansible.builtin.command:
+        cmd: >-
+          podman build
+          -t {{ rhem_advanced_oci_image_repo }}:{{ rhem_advanced_dest_tag }}
+          .
+        chdir: "{{ rhem_advanced_build_dir }}"
+      register: rhem_advanced_podman_build
+      async: "{{ rhem_advanced_build_async_timeout }}"
+      poll: 0
+      when: rhem_advanced_apply_build | bool
+      tags: [build]
+
+    - name: Wait for podman build to finish
+      ansible.builtin.async_status:
+        jid: "{{ rhem_advanced_podman_build.ansible_job_id }}"
+      register: rhem_advanced_build_job
+      until: rhem_advanced_build_job.finished
+      retries: "{{ (rhem_advanced_build_async_timeout | int) // (rhem_advanced_build_poll_interval | int) }}"
+      delay: "{{ rhem_advanced_build_poll_interval }}"
+      when:
+        - rhem_advanced_apply_build | bool
+        - rhem_advanced_podman_build.ansible_job_id is defined
+      tags: [build]
+
+    - name: Fail when podman build returned an error
+      ansible.builtin.fail:
+        msg: "podman build failed: {{ rhem_advanced_build_job.msg | default('unknown') }}"
+      when:
+        - rhem_advanced_apply_build | bool
+        - rhem_advanced_build_job.failed | default(false) | bool
+      tags: [build]
+
+    - name: Push advanced bootc image to lab registry
+      ansible.builtin.command:
+        cmd: >-
+          podman push
+          {% if rhem_built_registry_scheme == 'https' and rhem_built_registry_skip_tls_verify | bool %}
+          --tls-verify=false
+          {% endif %}
+          {{ rhem_advanced_oci_image_repo }}:{{ rhem_advanced_dest_tag }}
+      register: rhem_advanced_podman_push
+      changed_when: rhem_advanced_podman_push.rc == 0
+      when: rhem_advanced_apply_push | bool
+      tags: [push]
+
+    - name: List local advanced image
+      ansible.builtin.command:
+        cmd: podman images {{ rhem_advanced_oci_image_repo }}:{{ rhem_advanced_dest_tag }}
+      register: rhem_advanced_podman_images
+      changed_when: false
+      tags: [verify]
+
+    - name: Probe built registry for advanced image tags (HTTPS)
+      ansible.builtin.uri:
+        url: "https://{{ rhem_built_registry_host }}/v2/{{ rhem_advanced_dest_image }}/tags/list"
+        method: GET
+        validate_certs: "{{ not (rhem_built_registry_skip_tls_verify | bool) }}"
+        status_code: [200, 401]
+      register: rhem_advanced_registry_tags
+      failed_when: false
+      when: rhem_built_registry_scheme == 'https'
+      tags: [verify]
+
+    - name: Probe built registry for advanced image tags (HTTP)
+      ansible.builtin.uri:
+        url: "http://{{ rhem_built_registry_host }}/v2/{{ rhem_advanced_dest_image }}/tags/list"
+        method: GET
+        status_code: [200, 401]
+      register: rhem_advanced_registry_tags
+      failed_when: false
+      when: rhem_built_registry_scheme == 'http'
+      tags: [verify]
+
+    - name: Query SELinux mode
+      ansible.builtin.command:
+        cmd: getenforce
+      register: rhem_getenforce
+      changed_when: false
+      tags: [verify]
+
+    - name: Summarise advanced image build
+      ansible.builtin.debug:
+        msg:
+          - "Build context: {{ rhem_advanced_build_dir }}"
+          - "Binding: {{ rhem_advanced_binding }}"
+          - "Image: {{ rhem_advanced_oci_image_repo }}:{{ rhem_advanced_dest_tag }}"
+          - "Registry tags probe: {{ rhem_advanced_registry_tags.status | default('skipped') }}"
+          - "SELinux: {{ rhem_getenforce.stdout | default('unknown') }}"
+          - "Local images: {{ rhem_advanced_podman_images.stdout_lines | default([]) }}"
+      tags: [verify]

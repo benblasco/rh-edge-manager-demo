@@ -5,3 +5,7 @@
 rhem_pam_password: CHANGEME
 rhem_registry_username: CHANGEME
 rhem_registry_password: CHANGEME
+
+# Optional — only when the built-image registry requires authentication (see rhem_imagebuilds.yml)
+# rhem_built_registry_username: CHANGEME
+# rhem_built_registry_password: CHANGEME

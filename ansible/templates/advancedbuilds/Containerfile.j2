@@ -1,0 +1,13 @@
+# Rendered by Ansible — see README.image-builds-advanced.md
+FROM registry.redhat.io/{{ rhem_bootc_image_name }}:{{ rhem_bootc_image_tag }}
+
+RUN dnf config-manager --set-enabled {{ rhem_rhsm_repo_id }} && \
+    dnf -y install flightctl-agent {{ rhem_advanced_extra_packages | join(' ') }} && \
+    dnf -y clean all && \
+    systemctl enable flightctl-agent.service && \
+    systemctl enable cockpit.socket && \
+    systemctl mask bootc-fetch-apply-updates.timer
+{% if rhem_advanced_binding == 'early' %}
+
+ADD config.yaml /etc/flightctl/
+{% endif %}

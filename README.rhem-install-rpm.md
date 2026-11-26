@@ -15,7 +15,7 @@ Connected RPM control plane on RHEL 10 for host `rhem.hex.blasco.id.au`. Officia
 
 See [Install the RHEM RPM package](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel) and [Network ports](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/discover-con_rhem_standalone_gateway).
 
-## Host preparation (tag: `prepare`)
+## Host preparation (playbook tag: `prepare`)
 
 ```bash
 sudo hostnamectl set-hostname rhem.hex.blasco.id.au
@@ -33,7 +33,7 @@ sudo firewall-cmd --reload
 
 Plan DNS and TLS before clients connect. Details: [Plan DNS and TLS](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_rhem_gateway_dns_and_certs).
 
-## Install packages (tag: `install`)
+## Install packages (playbook tag: `install`)
 
 [Install the RHEM RPM package](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel).
 
@@ -43,7 +43,7 @@ sudo subscription-manager repos --enable edge-manager-1.4-for-rhel-10-x86_64-rpm
 sudo dnf install -y flightctl-services
 ```
 
-## DNS and TLS — service configuration (tag: `install`, before first start)
+## DNS and TLS — service configuration (playbook tag: `install`, before first start)
 
 Configure **after** `flightctl-services` is installed (the RPM ships a full default at `/etc/flightctl/service-config.yaml.rpmnew`).
 
@@ -68,7 +68,7 @@ Other keys you typically leave at RPM defaults: `generateCertificates: builtin`,
 
 Distribute `/etc/flightctl/pki/ca.crt` to admin clients that must trust the builtin CA.
 
-## Start and verify services (tag: `install`)
+## Start and verify services (playbook tag: `install`)
 
 Apply service config **before** the first start:
 
@@ -94,7 +94,7 @@ sudo systemctl restart flightctl.target
 
 Do **not** run `flightctl-standalone render quadlets` on an RPM-only host; it expects a source tree under `deploy/podman/`.
 
-## Authentication credentials (tag: `pam`)
+## Authentication credentials (playbook tag: `pam`)
 
 RHEM sign-in uses the **PAM issuer** container, not RHEL host accounts in `/etc/passwd`. Create users **inside** `flightctl-pam-issuer` with `podman exec` after `flightctl-pam-issuer` is running. Group `flightctl-admin` grants global administrator. See [Configure authentication credentials](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/install-con_installing_on_rhel).
 
@@ -108,7 +108,7 @@ sudo podman exec flightctl-pam-issuer useradd -m --groups flightctl-admin -p "$H
 
 Prefer interactive hashing in non-lab environments: `mkpasswd -m sha-512` (package `whois`) or `openssl passwd -6`.
 
-## Flight Control CLI (tag: `cli`)
+## Flight Control CLI (playbook tag: `cli`)
 
 ```bash
 sudo dnf install -y flightctl-cli
@@ -135,7 +135,7 @@ flightctl approve enrollmentrequest/<name>
 
 Enrollment approval is manual; it is not part of the Ansible install playbook.
 
-## Verification (tag: `verify`)
+## Verification (playbook tag: `verify`)
 
 ```bash
 dig +short rhem.hex.blasco.id.au

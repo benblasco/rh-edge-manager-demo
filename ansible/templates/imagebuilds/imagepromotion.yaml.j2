@@ -1,0 +1,19 @@
+apiVersion: flightctl.io/v1alpha1
+kind: ImagePromotion
+metadata:
+  name: {{ rhem_imagepromotion_name }}
+spec:
+  source:
+    imageBuildRef: {{ rhem_imagebuild_name }}
+{% if rhem_imagebuild_export_formats | length > 0 %}
+    exportFormats:
+{% for fmt in rhem_imagebuild_export_formats %}
+      - {{ fmt }}
+{% endfor %}
+{% endif %}
+  target:
+    type: NewCatalogItem
+    catalogName: {{ rhem_catalog_name }}
+    catalogItemName: {{ rhem_catalog_item_name }}
+    displayName: {{ rhem_catalog_display_name }}
+    version: "{{ rhem_catalog_item_version }}"

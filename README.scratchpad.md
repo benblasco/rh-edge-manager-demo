@@ -41,3 +41,26 @@ ansible-playbook playbooks/rhem-install-rpm.yml
 ```
 
 Inventory: `ansible/inventory/hosts.yml` — group `rhem_servers`.
+
+## Grafana container demo
+
+```bash
+podman run -d --rm \
+  --name grafana-demo \
+  -p 3000:3000 \
+  docker.io/grafana/grafana:latest
+```
+
+Then browse to:
+[](http://<RHEL-host-IP>:3000)
+
+user admin
+password admin
+
+# High level flow
+
+1. Define OCI source/destination repositories
+2. Add RH credentials to build host
+3. Build and push images using basic/advanced workflows
+4. Add images to RHEM catalog
+5. Catalog promotion

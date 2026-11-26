@@ -1,0 +1,15 @@
+apiVersion: flightctl.io/v1alpha1
+kind: ImageBuild
+metadata:
+  name: {{ rhem_imagebuild_name }}
+spec:
+  source:
+    repository: {{ rhem_oci_repo_redhat_name }}
+    imageName: {{ rhem_bootc_image_name }}
+    imageTag: "{{ rhem_bootc_image_tag }}"
+  destination:
+    repository: {{ rhem_oci_repo_built_name }}
+    imageName: {{ rhem_imagebuild_dest_image }}
+    imageTag: {{ rhem_imagebuild_dest_tag }}
+  binding:
+    type: {{ rhem_imagebuild_binding }}

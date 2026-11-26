@@ -17,7 +17,14 @@ Automates the connected install described in [../README.rhem-install-rpm.md](../
 | `inventory/hosts.yml` | Target host(s) in group `rhem_servers` |
 | `inventory/group_vars/rhem_servers/rhem.yml` | Non-secret variables |
 | `inventory/group_vars/rhem_servers/vault.yml` | Secrets (not in git; see `vault.yml.example`) |
-| `playbooks/rhem-install-rpm.yml` | Main playbook |
+| `playbooks/rhem-install-rpm.yml` | Connected RPM install |
+| `playbooks/rhem-image-builds.yml` | Image builder worker, OCI repos, ImageBuild ([README.image-builds-basic.md](../README.image-builds-basic.md)) |
+| `playbooks/rhem-image-builds-advanced.yml` | Advanced bootc image: Containerfile, early binding, `podman build`/`push` ([README.image-builds-advanced.md](../README.image-builds-advanced.md)) |
+| `templates/imagebuilds/*.j2` | `flightctl apply` manifests (Repository, ImageBuild, optional ImagePromotion) |
+| `templates/advancedbuilds/*.j2` | Containerfile and Podman registry drop-in for advanced builds |
+| `files/imagebuilder-worker-subscription.conf` | Quadlet drop-in for RHSM mounts on the worker |
+| `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml` | Simplified ImageBuild variables (non-secret) |
+| `inventory/group_vars/rhem_servers/rhem_advanced_imagebuilds.yml` | Advanced build variables (non-secret; uses registry vars from `rhem_imagebuilds.yml`) |
 
 ## Variables
 
@@ -26,7 +33,10 @@ Edit `inventory/group_vars/rhem_servers/rhem.yml` for FQDN, RHSM repo id, firewa
 Secrets in `vault.yml` (copy from `vault.yml.example`):
 
 - `rhem_pam_password` — PAM issuer UI user password
-- `rhem_registry_username` / `rhem_registry_password` — Red Hat registry login
+- `rhem_registry_username` / `rhem_registry_password` — Red Hat registry login (host `podman login` and OCI `Repository` ociAuth)
+- Optional: `rhem_built_registry_username` / `rhem_built_registry_password` — private push registry auth
+
+Image-build toggles and registry hostnames: `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml`. Advanced build names, packages, and binding: `rhem_advanced_imagebuilds.yml`.
 
 ## Collections
 
@@ -86,6 +96,91 @@ Partial run (must include `install` if the host has no RHEM packages yet):
 
 ```bash
 ansible-playbook playbooks/rhem-install-rpm.yml --tags prepare,install --ask-vault-pass
+```
+
+## Image builds
+
+After `rhem-install-rpm.yml` succeeds on the same inventory:
+
+```bash
+ansible-playbook playbooks/rhem-image-builds.yml --ask-vault-pass
+```
+
+### Play order and tags (`rhem-image-builds.yml`)
+
+1. **`worker`** — Quadlet subscription drop-in, `imagebuilderWorker` keys in `service-config.yaml`, worker running ([product doc](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_configuring_imagebuilder_worker_subscription_rhel))
+2. **`repositories`** — Render and `flightctl apply` OCI `Repository` manifests ([OCI repository](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-configuring_an_oci_repository))
+3. **`imagebuild`** — Render and apply `ImageBuild` ([simplified workflow](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_edge_mgr_build_images_simple))
+4. **`promotion`** — `ImagePromotion` when `rhem_imagebuild_promotion_enabled: true` (default **on** in lab `rhem_imagebuilds.yml`) ([publish from CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_image_build_catalog_cli))
+5. **`verify`** — Worker active, `flightctl get`, catalog items, built-registry probe, summary
+
+| Tag | Main steps |
+|-----|------------|
+| `worker` | RHSM mounts, `rpmRepoAdd` / `rpmRepoEnable`, worker service |
+| `repositories` | `registry-redhat-io` and built-registry `Repository` resources |
+| `imagebuild` | Apply `ImageBuild` (waits by default when promotion is enabled via `rhem_imagebuild_wait_complete`) |
+| `promotion` | Software Catalog `ImagePromotion` (waits via `rhem_imagepromotion_wait_complete` when enabled) |
+| `verify` | Post-config checks |
+
+Configure worker and repos only (no build):
+
+```bash
+ansible-playbook playbooks/rhem-image-builds.yml --tags worker,repositories --ask-vault-pass
+```
+
+A full run with default lab vars can take **30+ minutes** while the worker completes the build and promotion (`rhem_imagebuild_wait_complete` / `rhem_imagepromotion_wait_complete`). Set those to `false` for a quick manifest-only apply, then re-run with `--tags imagebuild,promotion,verify` after the build finishes.
+
+RHEL verification after image-build playbook (target host):
+
+```bash
+sudo systemctl is-active flightctl-imagebuilder-worker.service
+flightctl get repository
+flightctl get imagepromotion/testbuild1-promotion
+flightctl get catalogitems --catalog default
+flightctl logs imagebuild/testbuild1 -f
+getenforce
+```
+
+## Advanced image builds
+
+After `rhem-install-rpm.yml`, and preferably `rhem-image-builds.yml --tags repositories` so RHEM has the `micro-lan-built` OCI `Repository`:
+
+```bash
+ansible-playbook playbooks/rhem-image-builds-advanced.yml --ask-vault-pass
+```
+
+### Play order and tags (`rhem-image-builds-advanced.yml`)
+
+1. **`prereq`** — RHSM repo, `registry.redhat.io` login, lab registry drop-in for Podman (HTTPS skip-TLS)
+2. **`earlybinding`** — `flightctl login` if needed; `flightctl certificate request` → `config.yaml` (early binding)
+3. **`context`** — Build directory and rendered `Containerfile`
+4. **`build`** — `podman build` (async; may take 30+ minutes)
+5. **`push`** — `podman push` to `micro.lan:5000/advancedbuild1:latest`
+6. **`verify`** — Local image list, registry tag probe, `getenforce`
+
+| Tag | Main steps |
+|-----|------------|
+| `prereq` | Entitlement, registry logins, `registries.conf.d` drop-in |
+| `earlybinding` | Enrollment cert embedded in `config.yaml` |
+| `context` | `/etc/flightctl/advancedbuilds/advancedbuild1` layout |
+| `build` | `podman build` |
+| `push` | Push to lab registry |
+| `verify` | Post-build checks |
+
+Render context and renew enrollment cert only (no rebuild):
+
+```bash
+ansible-playbook playbooks/rhem-image-builds-advanced.yml --tags earlybinding,context --ask-vault-pass
+```
+
+Set `rhem_advanced_regenerate_enrollment_cert: true` in `rhem_advanced_imagebuilds.yml` to replace `config.yaml`, then re-run `build` and `push`.
+
+RHEL verification after advanced build (target host):
+
+```bash
+sudo podman images micro.lan:5000/advancedbuild1:latest
+curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"
+getenforce
 ```
 
 ## RHEL verification (on the target after a successful run)

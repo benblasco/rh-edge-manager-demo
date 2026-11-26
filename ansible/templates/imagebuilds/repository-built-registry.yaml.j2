@@ -1,0 +1,18 @@
+apiVersion: flightctl.io/v1beta1
+kind: Repository
+metadata:
+  name: {{ rhem_oci_repo_built_name }}
+spec:
+  type: oci
+  registry: {{ rhem_built_registry_host }}
+  scheme: {{ rhem_built_registry_scheme }}
+  accessMode: ReadWrite
+{% if rhem_built_registry_scheme == 'https' and rhem_built_registry_skip_tls_verify | bool %}
+  skipServerVerification: true
+{% endif %}
+{% if rhem_built_registry_username | default('') | length > 0 and rhem_built_registry_password | default('') | length > 0 %}
+  ociAuth:
+    authType: docker
+    username: {{ rhem_built_registry_username | to_json }}
+    password: {{ rhem_built_registry_password | to_json }}
+{% endif %}

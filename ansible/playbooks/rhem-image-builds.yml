@@ -1,0 +1,332 @@
+---
+# Simplified ImageBuild worker, OCI repositories, build, and Software Catalog promotion.
+# Prerequisites: playbooks/rhem-install-rpm.yml on the same inventory.
+# See README.image-builds-basic.md and inventory/group_vars/rhem_servers/rhem_imagebuilds.yml
+
+- name: Configure RHEM image builder worker and simplified ImageBuild
+  hosts: rhem_servers
+  become: true
+  gather_facts: false
+
+  handlers:
+    - name: Restart image builder worker
+      ansible.builtin.systemd:
+        name: "{{ rhem_imagebuilder_worker_service }}"
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart flightctl target after imagebuilderWorker config change
+      ansible.builtin.systemd:
+        name: "{{ rhem_systemd_target }}"
+        state: restarted
+        daemon_reload: true
+
+  vars:
+    rhem_imagebuild_manifest_redhat: "{{ rhem_imagebuild_manifest_dir }}/repository-{{ rhem_oci_repo_redhat_name }}.yaml"
+    rhem_imagebuild_manifest_built: "{{ rhem_imagebuild_manifest_dir }}/repository-{{ rhem_oci_repo_built_name }}.yaml"
+    rhem_imagebuild_manifest_build: "{{ rhem_imagebuild_manifest_dir }}/imagebuild-{{ rhem_imagebuild_name }}.yaml"
+    rhem_imagebuild_manifest_promotion: "{{ rhem_imagebuild_manifest_dir }}/imagepromotion-{{ rhem_imagepromotion_name }}.yaml"
+
+  pre_tasks:
+    - name: Require vault registry secrets for OCI Repository apply
+      ansible.builtin.assert:
+        that:
+          - rhem_registry_username is defined
+          - rhem_registry_password is defined
+          - rhem_registry_username != 'CHANGEME'
+          - rhem_registry_password != 'CHANGEME'
+        fail_msg: >-
+          Set rhem_registry_username and rhem_registry_password in vault.yml
+          (same credentials as registry.redhat.io podman login).
+      tags: [always]
+
+    - name: Assert promotion is not enabled without build completion wait
+      ansible.builtin.assert:
+        that:
+          - not (rhem_imagebuild_promotion_enabled | bool) or (rhem_imagebuild_wait_complete | bool)
+        fail_msg: >-
+          Set rhem_imagebuild_wait_complete: true when rhem_imagebuild_promotion_enabled is true,
+          or run a build to completion before the promotion tag.
+      tags: [always]
+
+  tasks:
+    - name: Ensure image builder worker quadlet drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ rhem_imagebuilder_quadlet_dropin_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      tags: [worker]
+
+    - name: Install subscription mounts drop-in for image builder worker
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../files/imagebuilder-worker-subscription.conf"
+        dest: "{{ rhem_imagebuilder_quadlet_dropin_dir }}/{{ rhem_imagebuilder_subscription_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart image builder worker
+      tags: [worker]
+
+    - name: Configure imagebuilderWorker in flightctl service configuration
+      ansible.builtin.blockinfile:
+        path: "{{ rhem_service_config_path }}"
+        marker: "# {mark} ANSIBLE MANAGED imagebuilderWorker"
+        block: |
+          imagebuilderWorker:
+            rpmRepoAdd: {{ rhem_imagebuilder_rpm_repo_add | bool | lower }}
+            rpmRepoEnable: {{ rhem_imagebuilder_rpm_repo_enable }}
+      notify:
+        - Restart flightctl target after imagebuilderWorker config change
+        - Restart image builder worker
+      tags: [worker]
+
+    - name: Apply service configuration handlers before starting worker
+      ansible.builtin.meta: flush_handlers
+      tags: [worker]
+
+    - name: Enable and start image builder worker
+      ansible.builtin.systemd:
+        name: "{{ rhem_imagebuilder_worker_service }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      tags: [worker]
+
+    - name: Ensure imagebuild manifest directory exists
+      ansible.builtin.file:
+        path: "{{ rhem_imagebuild_manifest_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      tags: [repositories, imagebuild, promotion]
+
+    - name: Render Red Hat OCI Repository manifest
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/imagebuilds/repository-redhat-io.yaml.j2"
+        dest: "{{ rhem_imagebuild_manifest_redhat }}"
+        owner: root
+        group: root
+        mode: "{{ rhem_imagebuild_manifest_mode }}"
+      tags: [repositories]
+
+    - name: Render built-image OCI Repository manifest
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/imagebuilds/repository-built.yaml.j2"
+        dest: "{{ rhem_imagebuild_manifest_built }}"
+        owner: root
+        group: root
+        mode: "{{ rhem_imagebuild_manifest_mode }}"
+      tags: [repositories]
+
+    - name: Render ImageBuild manifest
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/imagebuilds/imagebuild.yaml.j2"
+        dest: "{{ rhem_imagebuild_manifest_build }}"
+        owner: root
+        group: root
+        mode: "{{ rhem_imagebuild_manifest_mode }}"
+      tags: [imagebuild]
+
+    - name: Render ImagePromotion manifest
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/imagebuilds/imagepromotion.yaml.j2"
+        dest: "{{ rhem_imagebuild_manifest_promotion }}"
+        owner: root
+        group: root
+        mode: "{{ rhem_imagebuild_manifest_mode }}"
+      tags: [promotion]
+
+    - name: Check for existing flightctl client configuration
+      ansible.builtin.stat:
+        path: "{{ rhem_flightctl_client_config }}"
+      register: rhem_flightctl_client_stat
+      when: rhem_flightctl_login_enabled | bool
+      tags: [repositories, imagebuild, promotion, verify]
+
+    - name: Build flightctl login argument list
+      ansible.builtin.set_fact:
+        rhem_flightctl_login_argv: >-
+          {{ _rhem_flightctl_login_base + (['--insecure-skip-tls-verify'] if rhem_flightctl_login_insecure_tls | bool else []) }}
+      vars:
+        _rhem_flightctl_login_base:
+          - flightctl
+          - login
+          - "https://{{ rhem_fqdn }}"
+          - --username
+          - "{{ rhem_pam_username }}"
+          - --password
+          - "{{ rhem_pam_password }}"
+      when: rhem_flightctl_login_enabled | bool
+      no_log: true
+      tags: [repositories, imagebuild, promotion, verify]
+
+    - name: Log in flightctl CLI on RHEM host when needed
+      ansible.builtin.command:
+        argv: "{{ rhem_flightctl_login_argv }}"
+      when:
+        - rhem_flightctl_login_enabled | bool
+        - not rhem_flightctl_client_stat.stat.exists | default(false)
+      no_log: true
+      tags: [repositories, imagebuild, promotion, verify]
+
+    - name: Apply Red Hat OCI Repository
+      ansible.builtin.command:
+        cmd: flightctl apply -f {{ rhem_imagebuild_manifest_redhat }}
+      register: rhem_apply_repo_redhat
+      changed_when: >-
+        (rhem_apply_repo_redhat.stdout | default('') | lower) is search('created|configured|updated')
+      failed_when: >-
+        rhem_apply_repo_redhat.rc != 0
+        and 'already exists' not in (rhem_apply_repo_redhat.stderr | default('') | lower)
+      when: rhem_imagebuild_apply_repositories | bool
+      tags: [repositories]
+
+    - name: Apply built-image OCI Repository
+      ansible.builtin.command:
+        cmd: flightctl apply -f {{ rhem_imagebuild_manifest_built }}
+      register: rhem_apply_repo_built
+      changed_when: >-
+        (rhem_apply_repo_built.stdout | default('') | lower) is search('created|configured|updated')
+      failed_when: >-
+        rhem_apply_repo_built.rc != 0
+        and 'already exists' not in (rhem_apply_repo_built.stderr | default('') | lower)
+      when: rhem_imagebuild_apply_repositories | bool
+      tags: [repositories]
+
+    - name: Apply ImageBuild
+      ansible.builtin.command:
+        cmd: flightctl apply -f {{ rhem_imagebuild_manifest_build }}
+      register: rhem_apply_imagebuild
+      changed_when: >-
+        (rhem_apply_imagebuild.stdout | default('') | lower) is search('created|configured|updated')
+      failed_when: >-
+        rhem_apply_imagebuild.rc != 0
+        and 'already exists' not in (rhem_apply_imagebuild.stderr | default('') | lower)
+      when: rhem_imagebuild_apply_build | bool
+      tags: [imagebuild]
+
+    - name: Wait for ImageBuild to reach Completed phase
+      ansible.builtin.command:
+        cmd: flightctl get imagebuild/{{ rhem_imagebuild_name }} -o yaml
+      register: rhem_imagebuild_status
+      until: >-
+        rhem_imagebuild_status.stdout is search('reason:\\s+Completed')
+        or rhem_imagebuild_status.stdout is search('phase:\\s+Completed')
+      retries: "{{ rhem_imagebuild_wait_retries }}"
+      delay: "{{ rhem_imagebuild_wait_delay }}"
+      changed_when: false
+      when:
+        - rhem_imagebuild_apply_build | bool
+        - rhem_imagebuild_wait_complete | bool
+      tags: [imagebuild]
+
+    - name: Assert ImageBuild completed before catalog promotion
+      ansible.builtin.command:
+        cmd: flightctl get imagebuild/{{ rhem_imagebuild_name }} -o yaml
+      register: rhem_imagebuild_precheck
+      changed_when: false
+      failed_when: >-
+        rhem_imagebuild_precheck.stdout is not search('reason:\\s+Completed')
+        and rhem_imagebuild_precheck.stdout is not search('phase:\\s+Completed')
+      when:
+        - rhem_imagebuild_apply_promotion | bool
+        - not rhem_imagebuild_wait_complete | bool
+      tags: [promotion]
+
+    - name: Apply ImagePromotion to Software Catalog
+      ansible.builtin.command:
+        cmd: flightctl apply -f {{ rhem_imagebuild_manifest_promotion }}
+      register: rhem_apply_promotion
+      changed_when: >-
+        (rhem_apply_promotion.stdout | default('') | lower) is search('created|configured|updated')
+      failed_when: >-
+        rhem_apply_promotion.rc != 0
+        and 'already exists' not in (rhem_apply_promotion.stderr | default('') | lower)
+      when: rhem_imagebuild_apply_promotion | bool
+      tags: [promotion]
+
+    - name: Wait for ImagePromotion to reach Completed phase
+      ansible.builtin.command:
+        cmd: flightctl get imagepromotion/{{ rhem_imagepromotion_name }} -o yaml
+      register: rhem_imagepromotion_status
+      until: >-
+        rhem_imagepromotion_status.stdout is search('reason:\\s+Completed')
+        or rhem_imagepromotion_status.stdout is search('phase:\\s+Completed')
+      retries: "{{ rhem_imagepromotion_wait_retries }}"
+      delay: "{{ rhem_imagepromotion_wait_delay }}"
+      changed_when: false
+      when:
+        - rhem_imagebuild_apply_promotion | bool
+        - rhem_imagepromotion_wait_complete | bool
+      tags: [promotion]
+
+    - name: Assert image builder worker is active
+      ansible.builtin.command:
+        cmd: systemctl is-active {{ rhem_imagebuilder_worker_service }}
+      register: rhem_worker_active
+      changed_when: false
+      tags: [verify]
+
+    - name: Query SELinux mode
+      ansible.builtin.command:
+        cmd: getenforce
+      register: rhem_getenforce
+      changed_when: false
+      tags: [verify]
+
+    - name: List flightctl repositories
+      ansible.builtin.command:
+        cmd: flightctl get repository
+      register: rhem_flightctl_repositories
+      changed_when: false
+      failed_when: false
+      tags: [verify]
+
+    - name: Get ImageBuild resource
+      ansible.builtin.command:
+        cmd: flightctl get imagebuild/{{ rhem_imagebuild_name }}
+      register: rhem_flightctl_imagebuild
+      changed_when: false
+      failed_when: false
+      tags: [verify]
+
+    - name: Get ImagePromotion resource when catalog promotion enabled
+      ansible.builtin.command:
+        cmd: flightctl get imagepromotion/{{ rhem_imagepromotion_name }}
+      register: rhem_flightctl_imagepromotion
+      changed_when: false
+      failed_when: false
+      when: rhem_imagebuild_promotion_enabled | bool
+      tags: [verify]
+
+    - name: List catalog items when catalog promotion enabled
+      ansible.builtin.command:
+        cmd: flightctl get catalogitems --catalog {{ rhem_catalog_name }}
+      register: rhem_flightctl_catalogitems
+      changed_when: false
+      failed_when: false
+      when: rhem_imagebuild_promotion_enabled | bool
+      tags: [verify]
+
+    - name: Probe built-image registry tags endpoint
+      ansible.builtin.uri:
+        url: "{{ rhem_built_registry_scheme }}://{{ rhem_built_registry_host }}/v2/{{ rhem_imagebuild_dest_image }}/tags/list"
+        validate_certs: "{{ not (rhem_built_registry_skip_tls_verify | bool) }}"
+        status_code: [200, 401]
+      register: rhem_built_registry_probe
+      failed_when: false
+      changed_when: false
+      tags: [verify]
+
+    - name: Summarise image build result
+      ansible.builtin.debug:
+        msg:
+          - "Image builder worker: {{ rhem_worker_active.stdout | default('unknown') }}"
+          - "SELinux: {{ rhem_getenforce.stdout | default('unknown') }}"
+          - "ImageBuild: {{ rhem_imagebuild_name }} → {{ rhem_built_registry_host }}/{{ rhem_imagebuild_dest_image }}:{{ rhem_imagebuild_dest_tag }}"
+          - "Catalog promotion: {{ 'enabled (' ~ rhem_imagepromotion_name ~ ')' if rhem_imagebuild_promotion_enabled | bool else 'disabled' }}"
+          - "Registry tags probe HTTP status: {{ rhem_built_registry_probe.status | default('skipped') }}"
+      tags: [verify]

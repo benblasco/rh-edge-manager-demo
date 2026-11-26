@@ -1,0 +1,62 @@
+---
+# Image builder worker and simplified ImageBuild defaults (see README.image-builds-basic.md).
+# Secrets for registry.redhat.io OCI auth: vault.yml (rhem_registry_username / rhem_registry_password).
+
+rhem_imagebuilder_worker_service: flightctl-imagebuilder-worker.service
+rhem_imagebuilder_quadlet_dropin_dir: /etc/containers/systemd/flightctl-imagebuilder-worker.container.d
+rhem_imagebuilder_subscription_dropin: subscription.conf
+
+rhem_imagebuild_manifest_dir: /etc/flightctl/imagebuild-manifests
+rhem_imagebuild_manifest_mode: "0600"
+
+# OCI Repository resource names (flightctl apply)
+rhem_oci_repo_redhat_name: registry-redhat-io
+rhem_oci_repo_built_name: micro-lan-built
+
+# Base image (registry.redhat.io)
+rhem_bootc_image_name: rhel10/rhel-bootc
+rhem_bootc_image_tag: "1795492183"
+
+# Built-image registry (lab Distribution registry — HTTPS on :5000 in this lab)
+rhem_built_registry_host: micro.lan:5000
+rhem_built_registry_scheme: https
+rhem_built_registry_skip_tls_verify: true
+# Optional auth: set in vault (rhem_built_registry_username / rhem_built_registry_password)
+rhem_built_registry_username: ""
+rhem_built_registry_password: ""
+
+# Image builder worker (service-config.yaml imagebuilderWorker)
+rhem_imagebuilder_rpm_repo_add: false
+rhem_imagebuilder_rpm_repo_enable: "{{ rhem_rhsm_repo_id }}"
+
+# ImageBuild
+rhem_imagebuild_name: testbuild1
+rhem_imagebuild_dest_image: testbuild1
+rhem_imagebuild_dest_tag: latest
+rhem_imagebuild_binding: early
+
+# Control which manifests are applied
+rhem_imagebuild_apply_repositories: true
+rhem_imagebuild_apply_build: true
+
+# Software Catalog (ImagePromotion after successful build)
+rhem_imagebuild_promotion_enabled: true
+rhem_imagepromotion_name: testbuild1-promotion
+rhem_catalog_name: default
+rhem_catalog_item_name: testbuild1
+rhem_catalog_display_name: Lab RHEL 10 early-binding image
+rhem_catalog_item_version: "1.0.0"
+# Omit container here: this lab gateway (1.4.1) rejects exportFormats container in apply schema;
+# omit the field to publish the bootc reference from the completed ImageBuild (disk formats: qcow2, iso, vmdk).
+rhem_imagebuild_export_formats: []
+rhem_imagebuild_apply_promotion: "{{ rhem_imagebuild_promotion_enabled }}"
+
+# Long-running build: poll until ImageBuild completes (can take 30+ minutes)
+rhem_imagebuild_wait_complete: "{{ rhem_imagebuild_promotion_enabled }}"
+rhem_imagebuild_wait_retries: 120
+rhem_imagebuild_wait_delay: 60
+
+# ImagePromotion wait (after apply)
+rhem_imagepromotion_wait_complete: "{{ rhem_imagebuild_promotion_enabled }}"
+rhem_imagepromotion_wait_retries: 60
+rhem_imagepromotion_wait_delay: 30
