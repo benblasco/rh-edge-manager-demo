@@ -126,7 +126,6 @@ Confirm reachability:
 
 ```bash
 curl -kfsS "https://micro.lan:5000/v2/" || curl -fsS "http://micro.lan:5000/v2/"
-getenforce
 ```
 
 ## Build and push
@@ -216,7 +215,6 @@ sudo podman images micro.lan:5000/advancedbuild1:latest
 curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"
 flightctl get catalogitem advancedbuild1 --catalog default
 flightctl get catalogitems --catalog default
-getenforce
 ```
 
 On a device or test VM booted from the image (after enrollment): confirm packages and Cockpit socket:
@@ -224,7 +222,6 @@ On a device or test VM booted from the image (after enrollment): confirm package
 ```bash
 rpm -q tmux bash-completion cockpit flightctl-agent
 systemctl is-enabled flightctl-agent.service cockpit.socket
-getenforce
 ```
 
 ## References

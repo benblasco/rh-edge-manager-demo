@@ -1,0 +1,29 @@
+apiVersion: flightctl.io/v1beta1
+kind: Fleet
+metadata:
+  name: {{ rhem_fleet_grafana_name }}
+spec:
+  selector:
+    matchLabels:
+      fleet: {{ rhem_fleet_grafana_name }}
+  template:
+    spec:
+      applications:
+        - name: {{ rhem_fleet_grafana_app_name }}
+          appType: quadlet
+          catalogItemRef:
+            catalog: {{ rhem_fleet_grafana_catalog_name }}
+            item: {{ rhem_fleet_grafana_catalog_item_name }}
+            version: "{{ rhem_fleet_grafana_catalog_item_version }}"
+            channel: {{ rhem_fleet_grafana_catalog_channel }}
+          ports:
+            - "{{ rhem_fleet_grafana_publish_port }}"
+          inline:
+            - path: {{ rhem_fleet_grafana_quadlet_unit }}
+              content: |
+                [Container]
+                Image={{ rhem_fleet_grafana_container_image }}
+                PublishPort={{ rhem_fleet_grafana_publish_port }}
+
+                [Install]
+                WantedBy=default.target

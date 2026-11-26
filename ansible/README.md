@@ -7,7 +7,7 @@ Automates the connected install described in [../README.rhem-install-rpm.md](../
 - RHEL 10 with sudo over SSH, Podman, active Edge Manager subscription, and firewall managed by firewalld.
 - DNS `A`/`AAAA` for `rhem_fqdn` pointing at this host.
 - `registry.redhat.io` credentials for `podman login`.
-- Ansible control node with `ansible-playbook` and collections from `requirements.yml`.
+- Ansible control node with `ansible-playbook`, collections from `requirements.yml`, and **Python 3.12+** when using `flightctl.core` playbooks (catalog, and future fleet/image API automation).
 
 ## Layout
 
@@ -18,15 +18,22 @@ Automates the connected install described in [../README.rhem-install-rpm.md](../
 | `inventory/group_vars/rhem_servers/rhem.yml` | Non-secret variables |
 | `inventory/group_vars/rhem_servers/vault.yml` | Secrets (not in git; see `vault.yml.example`) |
 | `playbooks/rhem-install-rpm.yml` | Connected RPM install |
-| `playbooks/rhem-image-builds.yml` | Image builder worker, OCI repos, ImageBuild ([README.image-builds-basic.md](../README.image-builds-basic.md)) |
-| `playbooks/rhem-image-builds-advanced.yml` | Advanced bootc image: Containerfile, early binding, `podman build`/`push` ([README.image-builds-advanced.md](../README.image-builds-advanced.md)) |
+| `playbooks/rhem-image-builds.yml` | Worker on host; OCI repos, ImageBuild, ImagePromotion via `flightctl.core` on localhost |
+| `playbooks/rhem-image-builds-advanced.yml` | Advanced bootc image on host; `CatalogItem` via API on localhost |
 | `playbooks/rhem-catalog-grafana-demo.yml` | Grafana quadlet `CatalogItem` → `default` catalog ([README.catalog-quadlet.md](../README.catalog-quadlet.md)) |
-| `templates/imagebuilds/*.j2` | `flightctl apply` manifests (Repository, ImageBuild, optional ImagePromotion) |
-| `templates/advancedbuilds/*.j2` | Containerfile and Podman registry drop-in for advanced builds |
+| `playbooks/rhem-fleet-grafana-demo.yml` | Grafana quadlet `Fleet` referencing catalog item (API on localhost) |
+| `tasks/rhem_flightctl_render_and_apply.yml` | Shared: Jinja → `flightctl_resource` / `flightctl_image_builder` (no `flightctl apply`) |
+| `tasks/rhem_flightctl_wait_imagebuild.yml` | Poll `flightctl_image_builder_info` until build completes |
+| `tasks/rhem_flightctl_wait_imagepromotion.yml` | Poll `flightctl_resource_info` for `ImagePromotion` |
+| `templates/imagebuilds/*.j2` | API manifests for Repository, ImageBuild, ImagePromotion (rendered on controller) |
+| `templates/advancedbuilds/*.j2` | Containerfile, registry drop-in, advanced `CatalogItem` |
+| `templates/fleets/*.j2` | Fleet definitions (e.g. Grafana quadlet + `catalogItemRef`) |
 | `files/imagebuilder-worker-subscription.conf` | Quadlet drop-in for RHSM mounts on the worker |
 | `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml` | Simplified ImageBuild variables (non-secret) |
 | `inventory/group_vars/rhem_servers/rhem_advanced_imagebuilds.yml` | Advanced build variables (non-secret; uses registry vars from `rhem_imagebuilds.yml`) |
-| `inventory/group_vars/rhem_servers/rhem_catalog_grafana.yml` | Grafana catalog apply toggles and paths |
+| `inventory/group_vars/rhem_servers/rhem_flightctl_connection.yml` | Shared `flightctl.core` API host, TLS, username (password in vault) |
+| `inventory/group_vars/rhem_servers/rhem_catalog_grafana.yml` | Grafana catalog apply toggles and item name |
+| `inventory/group_vars/rhem_servers/rhem_fleet_grafana.yml` | Grafana fleet name and catalog references |
 
 ## Variables
 
@@ -40,11 +47,30 @@ Secrets in `vault.yml` (copy from `vault.yml.example`):
 
 Image-build toggles and registry hostnames: `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml`. Advanced build names, packages, and binding: `rhem_advanced_imagebuilds.yml`.
 
-## Collections
+## Collections and controller Python
+
+Galaxy collections (includes `flightctl.core` for RHEM API playbooks):
 
 ```bash
 cd ansible
 ansible-galaxy collection install -r requirements.yml
+```
+
+`flightctl.core` modules call the RHEM HTTPS API from the **Ansible controller** (not over SSH to the gateway). The controller must run **Python 3.12 or newer** and the pip packages in `requirements-controller.txt`:
+
+```bash
+python3 --version   # expect 3.12+
+python3 -m pip install -r requirements-controller.txt
+```
+
+The RHEM gateway must be **API version 1.3+** (1.4 RPM in this lab). The controller needs DNS/network reachability to `https://{{ rhem_fqdn }}` for catalog and other API playbooks.
+
+RHEL verification on the controller:
+
+```bash
+python3 --version
+python3 -m pip show flightctl-client PyYAML jsonpatch jsonschema
+ansible-galaxy collection list flightctl.core
 ```
 
 ## Secrets
@@ -76,7 +102,7 @@ Tasks run in this order (aligned with the manual README):
 2. **`install`** — RHSM repo, registry login, `flightctl-services` RPM, **then** seed `service-config.yaml` from `.rpmnew` and set `baseDomain`, flush handlers, start `flightctl.target`, wait for gateway
 3. **`pam`** — PAM admin group/user in `flightctl-pam-issuer`
 4. **`cli`** — `flightctl-cli`, optional CA trust, `flightctl login`
-5. **`verify`** — SELinux, ports, gateway, DNS from controller, summary
+5. **`verify`** — Ports, gateway, DNS from controller, summary
 
 Service configuration tasks are tagged **`prepare` and `install`** but execute only **after** the RPM is installed (they need `service-config.yaml.rpmnew` on the host).
 
@@ -111,10 +137,10 @@ ansible-playbook playbooks/rhem-image-builds.yml --ask-vault-pass
 ### Play order and tags (`rhem-image-builds.yml`)
 
 1. **`worker`** — Quadlet subscription drop-in, `imagebuilderWorker` keys in `service-config.yaml`, worker running ([product doc](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_configuring_imagebuilder_worker_subscription_rhel))
-2. **`repositories`** — Render and `flightctl apply` OCI `Repository` manifests ([OCI repository](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-configuring_an_oci_repository))
-3. **`imagebuild`** — Render and apply `ImageBuild` ([simplified workflow](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_edge_mgr_build_images_simple))
-4. **`promotion`** — `ImagePromotion` when `rhem_imagebuild_promotion_enabled: true` (default **on** in lab `rhem_imagebuilds.yml`) ([publish from CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_image_build_catalog_cli))
-5. **`verify`** — Worker active, `flightctl get`, catalog items, built-registry probe, summary
+2. **`repositories`** (localhost) — `flightctl_resource` for OCI `Repository` manifests from `templates/imagebuilds/` ([OCI repository](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-configuring_an_oci_repository))
+3. **`imagebuild`** (localhost) — `flightctl_image_builder` for `ImageBuild`; optional wait via `flightctl_image_builder_info`
+4. **`promotion`** (localhost) — `flightctl_resource` for `ImagePromotion` when `rhem_imagebuild_promotion_enabled: true` ([publish from CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_image_build_catalog_cli))
+5. **`verify`** — Worker and registry on host; API `flightctl_resource_info` / `flightctl_image_builder_info` on localhost
 
 | Tag | Main steps |
 |-----|------------|
@@ -132,48 +158,58 @@ ansible-playbook playbooks/rhem-image-builds.yml --tags worker,repositories --as
 
 A full run with default lab vars can take **30+ minutes** while the worker completes the build and promotion (`rhem_imagebuild_wait_complete` / `rhem_imagepromotion_wait_complete`). Set those to `false` for a quick manifest-only apply, then re-run with `--tags imagebuild,promotion,verify` after the build finishes.
 
-RHEL verification after image-build playbook (target host):
+RHEL verification after image-build playbook:
 
 ```bash
+# On RHEM host
 sudo systemctl is-active flightctl-imagebuilder-worker.service
+
+# On Ansible controller (re-run verify tag or CLI on gateway)
+ansible-playbook playbooks/rhem-image-builds.yml --tags verify --ask-vault-pass
 flightctl get repository
 flightctl get imagepromotion/testbuild1-promotion
-flightctl get catalogitems --catalog default
 flightctl logs imagebuild/testbuild1 -f
-getenforce
 ```
+
+New control-plane playbooks should follow the same pattern: Jinja under `templates/`, `include_tasks: ../tasks/rhem_flightctl_render_and_apply.yml`, `module_defaults` from `rhem_flightctl_connection.yml`, and **no** `command: flightctl apply`.
 
 ## Software Catalog: Grafana quadlet
 
-After `rhem-install-rpm.yml` succeeds:
+After `rhem-install-rpm.yml` succeeds, install controller pip deps and collections (see [Collections and controller Python](#collections-and-controller-python)), then:
 
 ```bash
 ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --ask-vault-pass
 ```
 
-Copies [`catalog/applications/grafana-demo/catalogitem.yaml`](../catalog/applications/grafana-demo/catalogitem.yaml) to the RHEM host and runs `flightctl apply`. Fleet deployment is not part of this playbook.
+The playbook reads [`catalog/applications/grafana-demo/catalogitem.yaml`](../catalog/applications/grafana-demo/catalogitem.yaml) on the controller and applies it with `flightctl.core.flightctl_resource` (`kind: CatalogItem`, `catalog_name: default`). It does not copy a manifest to the RHEM host or require `flightctl` CLI on the gateway for catalog publish. Fleet deployment is not part of this playbook.
+
+Connection settings: `rhem_flightctl_connection.yml` and `rhem_pam_password` in vault (same PAM user as `flightctl login` on the host).
 
 ### Tags (`rhem-catalog-grafana-demo.yml`)
 
 | Tag | Main steps |
 |-----|------------|
-| `catalog` | Login if needed, stage manifest, `flightctl apply` |
-| `verify` | `getenforce`, `dnf list installed flightctl-cli`, `flightctl get catalogitem` |
+| `catalog` | Assert manifest on controller, `flightctl_resource` apply, `flightctl_resource_info` |
+| `verify` | API catalog item lookup and summary |
 
-Re-apply manifest only:
+Re-apply catalog item only (localhost API play):
 
 ```bash
 ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --tags catalog --ask-vault-pass
 ```
 
-Set `rhem_catalog_grafana_enabled: false` in `rhem_catalog_grafana.yml` to skip the play. Set `rhem_catalog_grafana_force_login: true` to run `flightctl login` even when client config already exists.
+Set `rhem_catalog_grafana_enabled: false` in `rhem_catalog_grafana.yml` to skip the play.
 
-RHEL verification on the target after a successful run:
+RHEL verification after a successful run (controller — API object):
+
+```bash
+ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --tags verify --ask-vault-pass
+```
+
+On the RHEM host (optional CLI checks):
 
 ```bash
 flightctl get catalogitem grafana-demo --catalog default
-flightctl get catalogitems --catalog default
-getenforce
 ```
 
 ## Advanced image builds
@@ -192,7 +228,7 @@ ansible-playbook playbooks/rhem-image-builds-advanced.yml --ask-vault-pass
 4. **`build`** — `podman build` (async; may take 30+ minutes)
 5. **`push`** — `podman push` to `micro.lan:5000/advancedbuild1:latest`
 6. **`promotion`** — Apply `CatalogItem` to the Software Catalog (not `ImagePromotion`; there is no `ImageBuild` on this path)
-7. **`verify`** — Registry probe, `flightctl get catalogitem`, `getenforce`
+7. **`verify`** — Registry probe, API/CLI catalog item lookup
 
 | Tag | Main steps |
 |-----|------------|
@@ -201,7 +237,7 @@ ansible-playbook playbooks/rhem-image-builds-advanced.yml --ask-vault-pass
 | `context` | `/etc/flightctl/advancedbuilds/advancedbuild1` layout |
 | `build` | `podman build` |
 | `push` | Push to lab registry |
-| `promotion` | `flightctl apply` `CatalogItem` (`rhem_advanced_catalog_enabled`) |
+| `promotion` (localhost) | `flightctl_resource` `CatalogItem` (`rhem_advanced_catalog_enabled`) |
 | `verify` | Podman image, registry tags, catalog item listing |
 
 Render context and renew enrollment cert only (no rebuild):
@@ -225,13 +261,26 @@ sudo podman images micro.lan:5000/advancedbuild1:latest
 curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"
 flightctl get catalogitem advancedbuild1 --catalog default
 flightctl get catalogitems --catalog default
-getenforce
 ```
+
+## Fleet: Grafana quadlet
+
+After `rhem-catalog-grafana-demo.yml` registers the catalog item:
+
+```bash
+ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
+```
+
+| Tag | Main steps |
+|-----|------------|
+| `fleet` | Render `templates/fleets/grafana-demo.yaml.j2`, `flightctl_resource` `Fleet` |
+| `verify` | `flightctl_resource_info` and summary |
+
+Set `rhem_fleet_grafana_enabled: false` to skip. Devices must carry label `fleet: <rhem_fleet_grafana_name>` (enrollment not in this playbook).
 
 ## RHEL verification (on the target after a successful run)
 
 ```bash
-getenforce
 sudo systemctl is-active flightctl-gateway.service
 sudo ss -tlnp | grep -E ':443|:7443'
 flightctl version

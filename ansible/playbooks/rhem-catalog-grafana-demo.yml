@@ -1,21 +1,42 @@
 ---
-# Publish Grafana quadlet CatalogItem to the default Software Catalog.
-# Requires: rhem-install-rpm.yml (flightctl-cli, gateway, PAM user).
+# Publish Grafana quadlet CatalogItem to the default Software Catalog via RHEM API.
+# Requires: rhem-install-rpm.yml (gateway reachable); flightctl.core on the controller.
 # Manifest source of truth: catalog/applications/grafana-demo/catalogitem.yaml (repo root).
 
 - name: Register Grafana demo in RHEM Software Catalog
-  hosts: rhem_servers
-  become: true
-  gather_facts: true
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+  collections:
+    - flightctl.core
+  vars_files:
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/rhem.yml"
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/rhem_flightctl_connection.yml"
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/rhem_catalog_grafana.yml"
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/vault.yml"
   vars:
-    rhem_catalog_grafana_manifest_src: "{{ rhem_catalog_grafana_manifest_src_override | default(playbook_dir ~ '/../../catalog/applications/grafana-demo/catalogitem.yaml', true) }}"
+    rhem_catalog_grafana_manifest_src: >-
+      {{ rhem_catalog_grafana_manifest_src_override
+         | default(playbook_dir ~ '/../../catalog/applications/grafana-demo/catalogitem.yaml', true) }}
+  module_defaults:
+    flightctl.core.flightctl_resource:
+      flightctl_host: "{{ rhem_flightctl_connection.flightctl_host }}"
+      flightctl_username: "{{ rhem_flightctl_connection.flightctl_username }}"
+      flightctl_password: "{{ rhem_flightctl_connection.flightctl_password }}"
+      flightctl_validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    flightctl.core.flightctl_resource_info:
+      flightctl_host: "{{ rhem_flightctl_connection.flightctl_host }}"
+      flightctl_username: "{{ rhem_flightctl_connection.flightctl_username }}"
+      flightctl_password: "{{ rhem_flightctl_connection.flightctl_password }}"
+      flightctl_validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
 
   pre_tasks:
     - name: Skip playbook when catalog apply disabled
       ansible.builtin.meta: end_play
       when: not rhem_catalog_grafana_enabled | bool
 
-    - name: Require vault secrets for flightctl login
+    - name: Require vault secret for RHEM API login
       ansible.builtin.assert:
         that:
           - rhem_pam_password is defined
@@ -24,7 +45,6 @@
         fail_msg: >-
           Set rhem_pam_password in inventory/group_vars/rhem_servers/vault.yml
           (see vault.yml.example).
-      when: rhem_flightctl_login_enabled | bool
       tags: [always]
 
   tasks:
@@ -32,8 +52,6 @@
       ansible.builtin.stat:
         path: "{{ rhem_catalog_grafana_manifest_src }}"
       register: rhem_catalog_grafana_manifest_stat
-      delegate_to: localhost
-      become: false
       tags: [catalog]
 
     - name: Require catalog manifest file
@@ -45,134 +63,29 @@
           Run from repo checkout with catalog/applications/grafana-demo/catalogitem.yaml present.
       tags: [catalog]
 
-    - name: Ensure flightctl CLI package is installed
-      ansible.builtin.dnf:
-        name: "{{ rhem_package_cli }}"
+    - name: Ensure Grafana quadlet CatalogItem is present
+      flightctl.core.flightctl_resource:
+        kind: CatalogItem
+        name: "{{ rhem_catalog_grafana_item_name }}"
+        catalog_name: "{{ rhem_catalog_grafana_catalog_name }}"
         state: present
-      tags: [catalog]
-
-    - name: Ensure catalog staging directory exists
-      ansible.builtin.file:
-        path: "{{ rhem_catalog_grafana_manifest_dest | dirname }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-      tags: [catalog]
-
-    - name: Check for existing flightctl client configuration
-      ansible.builtin.stat:
-        path: "{{ rhem_flightctl_client_config }}"
-      register: rhem_flightctl_client_stat
-      when: rhem_flightctl_login_enabled | bool
-      tags: [catalog]
-
-    - name: Build flightctl login argument list
-      ansible.builtin.set_fact:
-        rhem_flightctl_login_argv: >-
-          {{ _rhem_flightctl_login_base + (['--insecure-skip-tls-verify'] if rhem_flightctl_login_insecure_tls | bool else []) }}
-      vars:
-        _rhem_flightctl_login_base:
-          - flightctl
-          - login
-          - "https://{{ rhem_fqdn }}"
-          - --username
-          - "{{ rhem_pam_username }}"
-          - --password
-          - "{{ rhem_pam_password }}"
-      when: rhem_flightctl_login_enabled | bool
+        resource_definition: "{{ lookup('file', rhem_catalog_grafana_manifest_src) | from_yaml }}"
       no_log: true
       tags: [catalog]
 
-    - name: Log in flightctl CLI on RHEM host
-      ansible.builtin.command:
-        argv: "{{ rhem_flightctl_login_argv }}"
-      when:
-        - rhem_flightctl_login_enabled | bool
-        - rhem_catalog_grafana_force_login | bool or not rhem_flightctl_client_stat.stat.exists | default(false)
-      no_log: true
-      tags: [catalog]
-
-    - name: Copy Grafana catalog item manifest to RHEM host
-      ansible.builtin.copy:
-        src: "{{ rhem_catalog_grafana_manifest_src }}"
-        dest: "{{ rhem_catalog_grafana_manifest_dest }}"
-        owner: root
-        group: root
-        mode: "0644"
-      tags: [catalog]
-
-    - name: Confirm default catalog exists
-      ansible.builtin.command:
-        argv:
-          - flightctl
-          - get
-          - catalog/{{ rhem_catalog_grafana_catalog_name }}
-      register: rhem_catalog_get_default
-      changed_when: false
-      tags: [catalog]
-
-    - name: Apply Grafana catalog item
-      ansible.builtin.command:
-        argv:
-          - flightctl
-          - apply
-          - -f
-          - "{{ rhem_catalog_grafana_manifest_dest }}"
-      register: rhem_catalog_grafana_apply
-      changed_when: rhem_catalog_grafana_apply.rc == 0
-      tags: [catalog]
-
-    - name: Query SELinux mode
-      ansible.builtin.command:
-        cmd: getenforce
-      register: rhem_getenforce
-      changed_when: false
-      tags: [verify]
-
-    - name: Assert SELinux is enforcing when required
-      ansible.builtin.assert:
-        that:
-          - not rhem_verify_selinux_enforcing | bool or rhem_getenforce.stdout == 'Enforcing'
-        fail_msg: "SELinux is {{ rhem_getenforce.stdout }}; this demo expects Enforcing."
-      tags: [verify]
-
-    - name: Verify flightctl-cli package
-      ansible.builtin.command:
-        cmd: dnf list installed flightctl-cli
-      register: rhem_flightctl_cli_dnf
-      changed_when: false
-      tags: [verify]
-
-    - name: Verify Grafana catalog item
-      ansible.builtin.command:
-        argv:
-          - flightctl
-          - get
-          - catalogitem/{{ rhem_catalog_grafana_item_name }}
-          - --catalog
-          - "{{ rhem_catalog_grafana_catalog_name }}"
-      register: rhem_catalog_grafana_get
-      changed_when: false
-      tags: [verify]
-
-    - name: List catalog items in default catalog
-      ansible.builtin.command:
-        argv:
-          - flightctl
-          - get
-          - catalogitems
-          - --catalog
-          - "{{ rhem_catalog_grafana_catalog_name }}"
-      register: rhem_catalog_items_list
-      changed_when: false
-      tags: [verify]
+    - name: Get Grafana catalog item
+      flightctl.core.flightctl_resource_info:
+        kind: CatalogItem
+        catalog_name: "{{ rhem_catalog_grafana_catalog_name }}"
+        name: "{{ rhem_catalog_grafana_item_name }}"
+      register: grafana_catalog_item
+      tags: [verify, catalog]
 
     - name: Summarise catalog registration
       ansible.builtin.debug:
         msg:
           - "Catalog item: {{ rhem_catalog_grafana_item_name }} (catalog {{ rhem_catalog_grafana_catalog_name }})"
-          - "Manifest on host: {{ rhem_catalog_grafana_manifest_dest }}"
+          - "Manifest source: {{ rhem_catalog_grafana_manifest_src }}"
           - "UI: https://{{ rhem_fqdn }}/ — Software Catalog"
-          - "SELinux: {{ rhem_getenforce.stdout }}"
+          - "API changed: see flightctl_resource task result"
       tags: [verify]

@@ -1,0 +1,15 @@
+---
+# Grafana quadlet fleet (API play). Requires catalog item from rhem-catalog-grafana-demo.yml.
+
+rhem_fleet_grafana_enabled: true
+rhem_fleet_grafana_name: grafana-demo-fleet
+
+rhem_fleet_grafana_catalog_name: "{{ rhem_catalog_grafana_catalog_name | default('default') }}"
+rhem_fleet_grafana_catalog_item_name: "{{ rhem_catalog_grafana_item_name | default('grafana-demo') }}"
+rhem_fleet_grafana_catalog_item_version: "1.0.0"
+rhem_fleet_grafana_catalog_channel: testing
+
+rhem_fleet_grafana_app_name: grafana-demo
+rhem_fleet_grafana_publish_port: "3000:3000"
+rhem_fleet_grafana_quadlet_unit: grafana-demo.container
+rhem_fleet_grafana_container_image: docker.io/grafana/grafana:latest

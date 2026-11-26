@@ -1,0 +1,18 @@
+---
+# Wait until an ImagePromotion reports Completed.
+# Required: rhem_imagepromotion_name
+
+- name: Wait for ImagePromotion to finish
+  flightctl.core.flightctl_resource_info:
+    kind: ImagePromotion
+    name: "{{ rhem_imagepromotion_name }}"
+  register: rhem_flightctl_imagepromotion_wait
+  until: >-
+    rhem_flightctl_imagepromotion_wait.result.data | default([]) | length > 0
+    and (
+      rhem_flightctl_imagepromotion_wait.result.data[0].status.phase | default('') == 'Completed'
+      or rhem_flightctl_imagepromotion_wait.result.data[0].status.reason | default('') == 'Completed'
+    )
+  retries: "{{ rhem_imagepromotion_wait_retries }}"
+  delay: "{{ rhem_imagepromotion_wait_delay }}"
+  changed_when: false

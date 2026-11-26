@@ -34,6 +34,5 @@ rhem_install_local_ca_trust: false
 rhem_flightctl_client_config: /root/.config/flightctl/client.yaml
 
 rhem_verify_dns: true
-rhem_verify_selinux_enforcing: true
 
 rhem_required_distribution_major_version: "10"

@@ -1,0 +1,66 @@
+---
+# Fleet with Grafana quadlet app from Software Catalog — applied via flightctl.core (no flightctl apply).
+# Requires: rhem-install-rpm.yml; rhem-catalog-grafana-demo.yml (catalog item present).
+
+- name: Ensure Grafana demo fleet is present
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+  collections:
+    - flightctl.core
+  vars_files:
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/rhem.yml"
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/rhem_catalog_grafana.yml"
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/rhem_fleet_grafana.yml"
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/rhem_flightctl_connection.yml"
+    - "{{ playbook_dir }}/../inventory/group_vars/rhem_servers/vault.yml"
+  module_defaults:
+    flightctl.core.flightctl_resource:
+      flightctl_host: "{{ rhem_flightctl_connection.flightctl_host }}"
+      flightctl_username: "{{ rhem_flightctl_connection.flightctl_username }}"
+      flightctl_password: "{{ rhem_flightctl_connection.flightctl_password }}"
+      flightctl_validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    flightctl.core.flightctl_resource_info:
+      flightctl_host: "{{ rhem_flightctl_connection.flightctl_host }}"
+      flightctl_username: "{{ rhem_flightctl_connection.flightctl_username }}"
+      flightctl_password: "{{ rhem_flightctl_connection.flightctl_password }}"
+      flightctl_validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+
+  pre_tasks:
+    - name: Skip fleet play when disabled
+      ansible.builtin.meta: end_play
+      when: not rhem_fleet_grafana_enabled | bool
+
+    - name: Require vault secret for RHEM API login
+      ansible.builtin.assert:
+        that:
+          - rhem_pam_password is defined
+          - rhem_pam_password | length > 0
+          - rhem_pam_password != 'CHANGEME'
+        fail_msg: >-
+          Set rhem_pam_password in inventory/group_vars/rhem_servers/vault.yml.
+      tags: [always]
+
+  tasks:
+    - name: Ensure Grafana demo fleet is present
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../tasks/rhem_flightctl_render_and_apply.yml"
+      vars:
+        rhem_flightctl_apply_template: "{{ playbook_dir }}/../templates/fleets/grafana-demo.yaml.j2"
+      tags: [fleet]
+
+    - name: Get Grafana demo fleet
+      flightctl.core.flightctl_resource_info:
+        kind: Fleet
+        name: "{{ rhem_fleet_grafana_name }}"
+      register: rhem_fleet_grafana_info
+      tags: [verify, fleet]
+
+    - name: Summarise fleet registration
+      ansible.builtin.debug:
+        msg:
+          - "Fleet: {{ rhem_fleet_grafana_name }}"
+          - "Catalog ref: {{ rhem_fleet_grafana_catalog_name }}/{{ rhem_fleet_grafana_catalog_item_name }}"
+          - "Assign devices with label fleet={{ rhem_fleet_grafana_name }} (enrollment outside this playbook)"
+      tags: [verify]

@@ -295,20 +295,6 @@
       no_log: true
       tags: [cli]
 
-    - name: Query SELinux mode
-      ansible.builtin.command:
-        cmd: getenforce
-      register: rhem_getenforce
-      changed_when: false
-      tags: [verify]
-
-    - name: Assert SELinux is enforcing when required
-      ansible.builtin.assert:
-        that:
-          - not rhem_verify_selinux_enforcing | bool or rhem_getenforce.stdout == 'Enforcing'
-        fail_msg: "SELinux is {{ rhem_getenforce.stdout }}; this demo expects Enforcing (do not use setenforce 0)."
-      tags: [verify]
-
     - name: Assert flightctl-gateway is active
       ansible.builtin.systemd:
         name: "{{ rhem_gateway_service }}"

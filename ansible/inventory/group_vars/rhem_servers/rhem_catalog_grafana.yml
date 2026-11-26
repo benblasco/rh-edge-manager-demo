@@ -1,10 +1,4 @@
 ---
-# Grafana quadlet CatalogItem (see README.catalog-quadlet.md and catalog/applications/grafana-demo/).
-
 rhem_catalog_grafana_enabled: true
-rhem_catalog_grafana_item_name: grafana-demo
 rhem_catalog_grafana_catalog_name: default
-# Optional override; default is repo catalog/applications/grafana-demo/catalogitem.yaml (set in playbook).
-# rhem_catalog_grafana_manifest_src_override: /path/on/controller/catalogitem.yaml
-rhem_catalog_grafana_manifest_dest: /etc/flightctl/catalogs/grafana-demo-catalogitem.yaml
-rhem_catalog_grafana_force_login: false
+rhem_catalog_grafana_item_name: grafana-demo

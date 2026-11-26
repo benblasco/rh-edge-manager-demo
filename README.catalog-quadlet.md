@@ -21,8 +21,10 @@ The workload image is still declared as artifact `type: container` with a versio
 
 ## Prerequisites
 
-- RHEM installed and reachable; see [README.rhem-use.md](README.rhem-use.md) for `flightctl login`.
-- `flightctl get catalog/default` succeeds (every org gets a `default` catalog).
+- RHEM installed and reachable over HTTPS from the Ansible controller (`https://` + your `rhem_fqdn`).
+- After [ansible/playbooks/rhem-install-rpm.yml](ansible/playbooks/rhem-install-rpm.yml): PAM user credentials in `ansible/inventory/group_vars/rhem_servers/vault.yml`.
+- Controller: Python 3.12+, Galaxy collection `flightctl.core`, and pip packages in [ansible/requirements-controller.txt](ansible/requirements-controller.txt) (see [ansible/README.md](ansible/README.md)).
+- Optional on the RHEM host: `flightctl login` and `flightctl get catalog/default` (every org gets a `default` catalog).
 
 ## Manifest in this repo
 
@@ -42,10 +44,11 @@ After [ansible/playbooks/rhem-install-rpm.yml](ansible/playbooks/rhem-install-rp
 ```bash
 cd ansible
 ansible-galaxy collection install -r requirements.yml
+python3 -m pip install -r requirements-controller.txt
 ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --ask-vault-pass
 ```
 
-See [ansible/README.md](ansible/README.md) for tags and variables (`rhem_catalog_grafana.yml`).
+The catalog playbook runs API modules on **localhost** using `rhem_flightctl_connection.yml` and the repo manifest file (no manifest copy to the gateway). See [ansible/README.md](ansible/README.md) for tags and variables (`rhem_catalog_grafana.yml`, `rhem_flightctl_connection.yml`).
 
 ### Manual (`flightctl` on the RHEM host)
 
@@ -58,15 +61,34 @@ flightctl get catalogitems --catalog default
 
 Confirm in the Flight Control UI under **Software Catalog** → **Grafana demo (quadlet)**.
 
-### Verification (RHEL admin host)
+### Verification
+
+Controller (repeat apply should report no change when the spec already matches):
 
 ```bash
-dnf list installed flightctl-cli
-flightctl get catalogitem grafana-demo --catalog default -o yaml
-getenforce
+cd ansible
+ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --tags verify --ask-vault-pass
+python3 --version
 ```
 
-## When you add a fleet (not covered here)
+RHEM gateway host (optional CLI):
+
+```bash
+flightctl get catalogitem grafana-demo --catalog default -o yaml
+```
+
+## Fleet (Ansible)
+
+After the catalog item exists, apply a demo fleet from the Ansible controller (no `flightctl apply` on the gateway):
+
+```bash
+cd ansible
+ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
+```
+
+Variables: `inventory/group_vars/rhem_servers/rhem_fleet_grafana.yml`. The manifest shape matches the manual example below (`appType` must be `quadlet`).
+
+## Manual fleet manifest (reference)
 
 Reference the catalog item; `appType` must be `quadlet`:
 
@@ -101,4 +123,4 @@ Devices need outbound access to pull `docker.io/grafana/grafana:latest` unless y
 
 - **`latest` tag**: fine for a home lab; pin a tag or digest for reproducibility.
 - **Grafana login**: default UI credentials are `admin` / `admin` (change on first login).
-- **Related docs in this repo**: [README.image-builds-advanced.md](README.image-builds-advanced.md) (OS `CatalogItem` via `flightctl apply`), [README.scratchpad.md](README.scratchpad.md) (lab host and quick apply).
+- **Related docs in this repo**: [ansible/README.md](ansible/README.md) (API playbooks), [README.image-builds-advanced.md](README.image-builds-advanced.md), [README.scratchpad.md](README.scratchpad.md).

@@ -1,0 +1,37 @@
+---
+# Render a Jinja manifest on the controller and apply it via the RHEM API (no flightctl apply).
+#
+# Required:
+#   rhem_flightctl_apply_template — path passed to lookup('template', ...)
+#
+# Optional:
+#   rhem_flightctl_apply_name — metadata.name override for the module name parameter
+#   rhem_flightctl_apply_catalog_name — CatalogItem catalog override
+#   rhem_flightctl_apply_secret — when true, no_log on render (Repository credentials)
+#
+# Caller play must set flightctl.core module_defaults (see rhem-catalog-grafana-demo.yml).
+
+- name: Render Flight Control manifest from template
+  ansible.builtin.set_fact:
+    rhem_flightctl_apply_definition: "{{ lookup('template', rhem_flightctl_apply_template) | from_yaml }}"
+  no_log: "{{ rhem_flightctl_apply_secret | default(false) | bool }}"
+
+- name: Ensure ImageBuild is present via image builder API
+  flightctl.core.flightctl_image_builder:
+    kind: ImageBuild
+    state: present
+    resource_definition: "{{ rhem_flightctl_apply_definition }}"
+  when: rhem_flightctl_apply_definition.kind == 'ImageBuild'
+  no_log: true
+
+- name: Ensure Flight Control resource is present
+  flightctl.core.flightctl_resource:
+    kind: "{{ rhem_flightctl_apply_definition.kind }}"
+    name: "{{ rhem_flightctl_apply_name | default(rhem_flightctl_apply_definition.metadata.name) }}"
+    catalog_name: >-
+      {{ rhem_flightctl_apply_catalog_name
+         | default(rhem_flightctl_apply_definition.metadata.catalog | default(omit)) }}
+    state: present
+    resource_definition: "{{ rhem_flightctl_apply_definition }}"
+  when: rhem_flightctl_apply_definition.kind != 'ImageBuild'
+  no_log: true

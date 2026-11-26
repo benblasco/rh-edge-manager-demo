@@ -19,7 +19,6 @@ See [Install the RHEM RPM package](https://docs.redhat.com/en/documentation/red_
 
 ```bash
 sudo hostnamectl set-hostname rhem.hex.blasco.id.au
-getenforce
 podman --version
 ```
 
@@ -142,7 +141,6 @@ dig +short rhem.hex.blasco.id.au
 sudo ss -tlnp | grep -E ':443|:7443'
 sudo systemctl is-active flightctl-gateway.service
 flightctl version
-getenforce
 ```
 
 ## References

@@ -97,7 +97,6 @@ Reload and restart the worker:
 sudo systemctl daemon-reload
 sudo systemctl restart flightctl-imagebuilder-worker.service
 sudo systemctl is-active flightctl-imagebuilder-worker.service
-getenforce
 ```
 
 Troubleshooting: `sudo subscription-manager status`, `sudo journalctl -u flightctl-imagebuilder-worker.service -b --no-pager`. See the worker doc for `RLIMIT_NOFILE` and subscription errors.
@@ -288,7 +287,6 @@ flightctl get imagebuild/testbuild1
 flightctl get imagepromotion/testbuild1-promotion
 flightctl get catalogitems --catalog default
 curl -kfsS "https://micro.lan:5000/v2/testbuild1/tags/list"
-getenforce
 ```
 
 ## References

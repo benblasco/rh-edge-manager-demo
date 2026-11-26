@@ -1,0 +1,37 @@
+---
+# Wait until an ImageBuild reaches Ready=Completed or Failed.
+# Required: rhem_imagebuild_name
+
+- name: Wait for ImageBuild to finish
+  flightctl.core.flightctl_image_builder_info:
+    kind: ImageBuild
+    name: "{{ rhem_imagebuild_name }}"
+  register: rhem_flightctl_imagebuild_wait
+  until: >-
+    rhem_flightctl_imagebuild_wait.result.data | default([]) | length > 0
+    and rhem_flightctl_imagebuild_wait.result.data[0].status is defined
+    and rhem_flightctl_imagebuild_wait.result.data[0].status.conditions is defined
+    and (
+      rhem_flightctl_imagebuild_wait.result.data[0].status.conditions
+      | selectattr('type', 'equalto', 'Ready')
+      | list | length > 0
+    )
+    and (
+      rhem_flightctl_imagebuild_wait.result.data[0].status.conditions
+      | selectattr('type', 'equalto', 'Ready')
+      | list | first
+    ).reason in ['Completed', 'Failed']
+  retries: "{{ rhem_imagebuild_wait_retries }}"
+  delay: "{{ rhem_imagebuild_wait_delay }}"
+  changed_when: false
+
+- name: Assert ImageBuild completed successfully
+  ansible.builtin.assert:
+    that:
+      - >-
+        (rhem_flightctl_imagebuild_wait.result.data[0].status.conditions
+        | selectattr('type', 'equalto', 'Ready')
+        | list | first).reason == 'Completed'
+    fail_msg: >-
+      ImageBuild {{ rhem_imagebuild_name }} did not complete:
+      {{ rhem_flightctl_imagebuild_wait.result.data[0].status | default('unknown') }}
