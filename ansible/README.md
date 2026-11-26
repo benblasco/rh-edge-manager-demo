@@ -20,11 +20,13 @@ Automates the connected install described in [../README.rhem-install-rpm.md](../
 | `playbooks/rhem-install-rpm.yml` | Connected RPM install |
 | `playbooks/rhem-image-builds.yml` | Image builder worker, OCI repos, ImageBuild ([README.image-builds-basic.md](../README.image-builds-basic.md)) |
 | `playbooks/rhem-image-builds-advanced.yml` | Advanced bootc image: Containerfile, early binding, `podman build`/`push` ([README.image-builds-advanced.md](../README.image-builds-advanced.md)) |
+| `playbooks/rhem-catalog-grafana-demo.yml` | Grafana quadlet `CatalogItem` → `default` catalog ([README.catalog-quadlet.md](../README.catalog-quadlet.md)) |
 | `templates/imagebuilds/*.j2` | `flightctl apply` manifests (Repository, ImageBuild, optional ImagePromotion) |
 | `templates/advancedbuilds/*.j2` | Containerfile and Podman registry drop-in for advanced builds |
 | `files/imagebuilder-worker-subscription.conf` | Quadlet drop-in for RHSM mounts on the worker |
 | `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml` | Simplified ImageBuild variables (non-secret) |
 | `inventory/group_vars/rhem_servers/rhem_advanced_imagebuilds.yml` | Advanced build variables (non-secret; uses registry vars from `rhem_imagebuilds.yml`) |
+| `inventory/group_vars/rhem_servers/rhem_catalog_grafana.yml` | Grafana catalog apply toggles and paths |
 
 ## Variables
 
@@ -138,6 +140,39 @@ flightctl get repository
 flightctl get imagepromotion/testbuild1-promotion
 flightctl get catalogitems --catalog default
 flightctl logs imagebuild/testbuild1 -f
+getenforce
+```
+
+## Software Catalog: Grafana quadlet
+
+After `rhem-install-rpm.yml` succeeds:
+
+```bash
+ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --ask-vault-pass
+```
+
+Copies [`catalog/applications/grafana-demo/catalogitem.yaml`](../catalog/applications/grafana-demo/catalogitem.yaml) to the RHEM host and runs `flightctl apply`. Fleet deployment is not part of this playbook.
+
+### Tags (`rhem-catalog-grafana-demo.yml`)
+
+| Tag | Main steps |
+|-----|------------|
+| `catalog` | Login if needed, stage manifest, `flightctl apply` |
+| `verify` | `getenforce`, `dnf list installed flightctl-cli`, `flightctl get catalogitem` |
+
+Re-apply manifest only:
+
+```bash
+ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --tags catalog --ask-vault-pass
+```
+
+Set `rhem_catalog_grafana_enabled: false` in `rhem_catalog_grafana.yml` to skip the play. Set `rhem_catalog_grafana_force_login: true` to run `flightctl login` even when client config already exists.
+
+RHEL verification on the target after a successful run:
+
+```bash
+flightctl get catalogitem grafana-demo --catalog default
+flightctl get catalogitems --catalog default
 getenforce
 ```
 

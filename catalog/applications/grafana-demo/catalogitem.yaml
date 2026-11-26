@@ -1,0 +1,22 @@
+apiVersion: flightctl.io/v1alpha1
+kind: CatalogItem
+metadata:
+  name: grafana-demo
+  catalog: default
+spec:
+  type: quadlet
+  category: application
+  displayName: Grafana demo (quadlet)
+  shortDescription: Upstream Grafana via Podman Quadlet on port 3000
+  artifacts:
+    - type: container
+      uri: docker.io/grafana/grafana
+  versions:
+    - version: "1.0.0"
+      channels:
+        - testing
+      references:
+        container: latest
+  defaults:
+    config:
+      runAs: root

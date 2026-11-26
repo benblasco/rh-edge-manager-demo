@@ -44,6 +44,8 @@ Inventory: `ansible/inventory/hosts.yml` — group `rhem_servers`.
 
 ## Grafana container demo
 
+Direct Podman (baseline):
+
 ```bash
 podman run -d --rm \
   --name grafana-demo \
@@ -51,16 +53,80 @@ podman run -d --rm \
   docker.io/grafana/grafana:latest
 ```
 
-Then browse to:
-[](http://<RHEL-host-IP>:3000)
+Then browse to `http://<RHEL-host-IP>:3000` — user `admin`, password `admin`.
 
-user admin
-password admin
+### Software Catalog (quadlet CatalogItem)
 
-# High level flow
+Full write-up: [README.catalog-quadlet.md](README.catalog-quadlet.md). Manifest: `catalog/applications/grafana-demo/catalogitem.yaml`.
 
-1. Define OCI source/destination repositories
-2. Add RH credentials to build host
-3. Build and push images using basic/advanced workflows
-4. Add images to RHEM catalog
-5. Catalog promotion
+Ansible (from repo `ansible/` dir, vault as for install playbook):
+
+```bash
+ansible-playbook playbooks/rhem-catalog-grafana-demo.yml --ask-vault-pass
+```
+
+Or manual on the RHEM host after `flightctl login` ([README.rhem-use.md](README.rhem-use.md)):
+
+```bash
+flightctl apply -f catalog/applications/grafana-demo/catalogitem.yaml
+flightctl get catalogitem grafana-demo --catalog default
+```
+
+Fleet consumption (`appType: quadlet` + `catalogItemRef`) is a separate task; stub in the catalog README.
+
+## High level flow
+
+Prerequisites (VM, DNS, RHEL, and sections above cover most of this):
+
+0. Install RHEM, `flightctl login`, and—for the **basic** path only—image builder worker RHSM subscription ([README.image-builds-basic.md](README.image-builds-basic.md))
+
+Shared image-build setup:
+
+1. Define OCI source/destination repositories (`Repository` resources)
+2. Add Red Hat registry credentials (basic: host `podman login` **and** OCI `Repository` `ociAuth`; advanced: Ansible `prereq`)
+
+**Basic** (simplified `ImageBuild`, [README.image-builds-basic.md](README.image-builds-basic.md)):
+
+3. Run `ImageBuild` — worker builds and pushes to the destination registry
+4. Publish via `ImagePromotion` — creates the Software Catalog item
+
+**Advanced** (Containerfile + Podman, [README.image-builds-advanced.md](README.image-builds-advanced.md)):
+
+3. `podman build` / `podman push` to the lab registry
+4. Register the image in the Software Catalog (`CatalogItem`; no `ImagePromotion`)
+
+After catalog registration: fleets, devices, rollouts ([README.image-builds-advanced.md](README.image-builds-advanced.md)).
+
+```mermaid
+flowchart TD
+  subgraph before [Before shared step 1]
+    VM[VM DNS RHEL configure]
+    RHEM[RHEM RPM install]
+    CLI[flightctl login]
+  end
+  subgraph basic [Basic simplified path]
+    S1[1 OCI Repositories]
+    S2a[2 RH auth on OCI plus host]
+    W[Worker RHSM mounts]
+    S3a[3 ImageBuild worker build push]
+    S5a[4 ImagePromotion]
+  end
+  subgraph advanced [Advanced Containerfile path]
+    S2b[2 RH auth prereq tag]
+    S3b[3 podman build push]
+    S4b[4 CatalogItem apply]
+  end
+  subgraph after [After catalog]
+    Fleet[Fleets devices rollouts]
+  end
+  before --> S1
+  S1 --> S2a
+  S2a --> W
+  W --> S3a
+  S3a --> S5a
+  S1 --> S2b
+  S2b --> S3b
+  S3b --> S4b
+  S5a --> Fleet
+  S4b --> Fleet
+```
