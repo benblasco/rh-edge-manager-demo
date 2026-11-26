@@ -16,7 +16,7 @@ Custom OS layers for Red Hat Edge Manager (RHEM) on lab host `rhem.hex.blasco.id
 | Build mechanism | RHEM image builder worker | `podman build` on an entitled RHEL host |
 | Agent + binding | Worker adds automatically | You install `flightctl-agent` in the Containerfile; optional `config.yaml` for early binding |
 | Push | Worker → OCI `Repository` | `podman push` to the same lab registry |
-| RHEM afterward | Catalog via `ImagePromotion` | Register image in Software Catalog (Git sync or catalog items) for fleet rollouts |
+| RHEM afterward | Catalog via `ImagePromotion` | Software Catalog via `CatalogItem` (`flightctl apply`); Ansible tag `promotion` |
 
 ## Lab variables (`advancedbuild1`)
 
@@ -31,6 +31,7 @@ Shared with [README.image-builds-basic.md](README.image-builds-basic.md) unless 
 | `BUILD_NAME` | `advancedbuild1` | Local build context directory and pushed image name |
 | `OCI_IMAGE_REPO` | `micro.lan:5000/advancedbuild1` | Full push reference |
 | `OCI_IMAGE_TAG` | `latest` | Use a new tag per version in production |
+| Catalog item | `advancedbuild1` in `default` | Ansible `promotion` tag (`rhem_advanced_imagebuilds.yml`) |
 
 Example image on the registry: `micro.lan:5000/advancedbuild1:latest`.
 
@@ -151,11 +152,45 @@ curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"
 
 RHEM’s OCI `Repository` resource `micro-lan-built` (from the simplified setup) already points at this registry; advanced images are consumed by **catalog/fleet references**, not by creating another `ImageBuild`.
 
-## After push: using the image with RHEM
+## After push: Software Catalog (`promotion` tag)
 
-1. **Software Catalog** — Publish so fleets and templates can reference the image by catalog item (Git-managed catalog YAML or UI), not via `ImagePromotion` tied to an `ImageBuild`. See [Software Catalog](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/deploy-con_software_catalog) and [Catalog reference rendering](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/deploy-con_catalog_reference_rendering).
-2. **Fleets / devices** — Roll out `catalogItemRef` (or equivalent) to devices; agents pull from the OCI URL resolved by RHEM.
-3. **Optional disk media** — [Build the operating system disk image](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-assembly_edge_mgr_build_images) with `bootc-image-builder` from the pushed bootc reference.
+Advanced images are **not** tied to an `ImageBuild`, so you cannot use `ImagePromotion`. Register the pushed OCI reference with a `CatalogItem` instead (same shape as a promoted worker build). Ansible applies the manifest when you run `playbooks/rhem-image-builds-advanced.yml` with tag **`promotion`** (or a full playbook run after `push`).
+
+Create `catalogitem-advancedbuild1.yaml`:
+
+```yaml
+apiVersion: flightctl.io/v1alpha1
+kind: CatalogItem
+metadata:
+  name: advancedbuild1
+  catalog: default
+spec:
+  type: os
+  category: system
+  displayName: Lab RHEL 10 advanced image
+  artifacts:
+    - type: container
+      uri: micro.lan:5000/advancedbuild1
+  versions:
+    - version: "1.0.0"
+      channels:
+        - testing
+      references:
+        container: latest
+```
+
+```bash
+flightctl apply -f catalogitem-advancedbuild1.yaml
+flightctl get catalogitem advancedbuild1 --catalog default
+flightctl get catalogitems --catalog default
+```
+
+See [Managing a catalog repository on the CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-managing_a_catalog_repository_on_the_cli) and [Catalog item reference rendering](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/deploy-con_catalog_reference_rendering).
+
+## After catalog registration: fleets and devices
+
+1. **Fleets / templates** — Reference the catalog item (for example `catalogItemRef`) in fleet or device specs.
+2. **Optional disk media** — [Build the operating system disk image](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-assembly_edge_mgr_build_images) with `bootc-image-builder` from the pushed bootc reference.
 
 Runtime application and device configuration can still change without rebaking; see [Special considerations for building images](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/plan-con_edge_mgr_images_consider).
 
@@ -179,6 +214,8 @@ Push to a **new name or tag** (for example `advancedbuild1:v2`) to avoid overwri
 dnf list installed podman skopeo flightctl-cli
 sudo podman images micro.lan:5000/advancedbuild1:latest
 curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"
+flightctl get catalogitem advancedbuild1 --catalog default
+flightctl get catalogitems --catalog default
 getenforce
 ```
 

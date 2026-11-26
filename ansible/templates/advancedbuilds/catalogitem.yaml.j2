@@ -1,0 +1,18 @@
+apiVersion: flightctl.io/v1alpha1
+kind: CatalogItem
+metadata:
+  name: {{ rhem_advanced_catalog_item_name }}
+  catalog: {{ rhem_advanced_catalog_name }}
+spec:
+  type: os
+  category: {{ rhem_advanced_catalog_category }}
+  displayName: {{ rhem_advanced_catalog_display_name }}
+  artifacts:
+    - type: container
+      uri: {{ rhem_built_registry_host }}/{{ rhem_advanced_dest_image }}
+  versions:
+    - version: "{{ rhem_advanced_catalog_item_version }}"
+      channels:
+        - {{ rhem_advanced_catalog_channel }}
+      references:
+        container: {{ rhem_advanced_dest_tag }}

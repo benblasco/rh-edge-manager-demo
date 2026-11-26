@@ -156,7 +156,8 @@ ansible-playbook playbooks/rhem-image-builds-advanced.yml --ask-vault-pass
 3. **`context`** — Build directory and rendered `Containerfile`
 4. **`build`** — `podman build` (async; may take 30+ minutes)
 5. **`push`** — `podman push` to `micro.lan:5000/advancedbuild1:latest`
-6. **`verify`** — Local image list, registry tag probe, `getenforce`
+6. **`promotion`** — Apply `CatalogItem` to the Software Catalog (not `ImagePromotion`; there is no `ImageBuild` on this path)
+7. **`verify`** — Registry probe, `flightctl get catalogitem`, `getenforce`
 
 | Tag | Main steps |
 |-----|------------|
@@ -165,7 +166,8 @@ ansible-playbook playbooks/rhem-image-builds-advanced.yml --ask-vault-pass
 | `context` | `/etc/flightctl/advancedbuilds/advancedbuild1` layout |
 | `build` | `podman build` |
 | `push` | Push to lab registry |
-| `verify` | Post-build checks |
+| `promotion` | `flightctl apply` `CatalogItem` (`rhem_advanced_catalog_enabled`) |
+| `verify` | Podman image, registry tags, catalog item listing |
 
 Render context and renew enrollment cert only (no rebuild):
 
@@ -175,11 +177,19 @@ ansible-playbook playbooks/rhem-image-builds-advanced.yml --tags earlybinding,co
 
 Set `rhem_advanced_regenerate_enrollment_cert: true` in `rhem_advanced_imagebuilds.yml` to replace `config.yaml`, then re-run `build` and `push`.
 
+Catalog only after a manual or prior `podman push`:
+
+```bash
+ansible-playbook playbooks/rhem-image-builds-advanced.yml --tags promotion,verify --ask-vault-pass
+```
+
 RHEL verification after advanced build (target host):
 
 ```bash
 sudo podman images micro.lan:5000/advancedbuild1:latest
 curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"
+flightctl get catalogitem advancedbuild1 --catalog default
+flightctl get catalogitems --catalog default
 getenforce
 ```
 
