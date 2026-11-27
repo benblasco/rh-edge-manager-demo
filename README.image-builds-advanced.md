@@ -209,7 +209,6 @@ Ansible stores the QCOW2 under `${rhem_advanced_build_dir}/output/qcow2/disk.qco
 Verify:
 
 ```bash
-getenforce
 dnf list installed podman
 sudo podman images registry.redhat.io/rhel10/bootc-image-builder
 test -f output/qcow2/disk.qcow2
@@ -274,7 +273,6 @@ Push to a **new name or tag** (for example `advancedbuild1:v2`) to avoid overwri
 
 ```bash
 dnf list installed podman skopeo flightctl-cli
-getenforce
 sudo podman images micro.lan:5000/advancedbuild1:latest
 sudo podman images registry.redhat.io/rhel10/bootc-image-builder
 curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"

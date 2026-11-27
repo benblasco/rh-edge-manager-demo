@@ -294,7 +294,6 @@ Set `rhem_advanced_qcow2_enabled: false` to skip disk export. Set `rhem_advanced
 RHEL verification after advanced build (target host):
 
 ```bash
-getenforce
 dnf list installed podman
 sudo podman images micro.lan:5000/advancedbuild1:latest
 sudo podman images registry.redhat.io/rhel10/bootc-image-builder

@@ -56,11 +56,10 @@ Run these on the **RHEM gateway** (or any host where `flightctl` is logged in to
 2. OS catalog item came from [README.image-builds-basic.md](README.image-builds-basic.md) (or `ansible/playbooks/rhem-image-builds.yml` with promotion enabled).
 3. Grafana catalog item came from [README.catalog-quadlet.md](README.catalog-quadlet.md) (or `ansible/playbooks/rhem-catalog-grafana-demo.yml`).
 
-RHEL sanity on the host where you run `flightctl`:
+On the host where you run `flightctl`:
 
 ```bash
 dnf list installed flightctl-cli
-getenforce
 ```
 
 ### Quick presence check
@@ -122,7 +121,6 @@ When the gateway is reachable, run the checks in [Optional: `flightctl` catalog 
 ```bash
 flightctl get catalogitem testbuild1 --catalog default
 flightctl get catalogitem grafana-demo --catalog default
-getenforce
 ```
 
 ### 2. Apply the fleet
@@ -180,7 +178,6 @@ flightctl get devices -l 'fleet=lab-testbuild1-grafana'
 On the device (RHEL):
 
 ```bash
-getenforce
 sudo systemctl status grafana-demo.service
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
