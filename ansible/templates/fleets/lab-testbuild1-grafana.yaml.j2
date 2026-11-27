@@ -27,12 +27,3 @@ spec:
 {% for port in rhem_fleet_grafana_publish_ports %}
             - "{{ port }}"
 {% endfor %}
-          inline:
-            - path: grafana-demo.container
-              content: |
-                [Container]
-                Image={{ rhem_fleet_grafana_container_image }}
-                PublishPort={{ rhem_fleet_grafana_publish_ports[0] }}
-
-                [Install]
-                WantedBy=default.target

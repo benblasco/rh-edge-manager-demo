@@ -45,19 +45,17 @@
       tags: [always]
 
   tasks:
-    - name: Apply Fleet via API
+    - name: Apply Fleet via gateway REST
       ansible.builtin.include_tasks:
-        file: "{{ playbook_dir }}/../tasks/rhem_flightctl_render_and_apply.yml"
+        file: "{{ playbook_dir }}/../tasks/rhem_flightctl_apply_fleet_rest.yml"
       vars:
         rhem_flightctl_apply_template: "{{ playbook_dir }}/../templates/fleets/lab-testbuild1-grafana.yaml.j2"
         rhem_flightctl_apply_name: "{{ rhem_fleet_grafana_name }}"
       tags: [fleet]
 
-    - name: Get fleet resource
-      flightctl.core.flightctl_resource_info:
-        kind: Fleet
-        name: "{{ rhem_fleet_grafana_name }}"
-      register: rhem_fleet_grafana_info
+    - name: Verify fleet on gateway
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../tasks/rhem_flightctl_verify_fleet_rest.yml"
       tags: [verify, fleet]
 
     - name: Summarise fleet apply

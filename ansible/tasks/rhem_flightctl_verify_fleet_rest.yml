@@ -1,0 +1,27 @@
+---
+# Read Fleet status over REST (avoids flightctl_resource_info deserialize warnings for quadlet apps).
+
+- name: Obtain OIDC bearer for control-plane API
+  ansible.builtin.include_tasks: rhem_flightctl_bearer_oidc_password.yml
+  tags: [verify]
+
+- name: Get fleet from gateway (REST)
+  ansible.builtin.uri:
+    url: >-
+      {{ rhem_flightctl_connection.flightctl_host | regex_replace('/$', '') }}/api/v1/fleets/{{ rhem_fleet_grafana_name }}
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rhem_flightctl_bearer_token }}"
+    validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    status_code: [200]
+  register: rhem_flightctl_fleet_verify_get
+  changed_when: false
+  tags: [verify]
+
+- name: Assert fleet template has OS and application entries
+  ansible.builtin.assert:
+    that:
+      - rhem_flightctl_fleet_verify_get.json.spec.template.spec.os.catalogItemRef.item is defined
+      - (rhem_flightctl_fleet_verify_get.json.spec.template.spec.applications | default([]) | length) >= 1
+    fail_msg: Fleet lab template missing expected OS or application catalogItemRef entries.
+  tags: [verify]

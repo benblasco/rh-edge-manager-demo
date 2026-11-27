@@ -23,6 +23,9 @@ Automates the connected install described in [../README.rhem-install-rpm.md](../
 | `playbooks/rhem-catalog-grafana-demo.yml` | Grafana quadlet `CatalogItem` → `default` catalog ([README.catalog-quadlet.md](../README.catalog-quadlet.md)) |
 | `playbooks/rhem-fleet-grafana-demo.yml` | Grafana quadlet `Fleet` referencing catalog item (API on localhost) |
 | `tasks/rhem_flightctl_render_and_apply.yml` | Shared: Jinja → `flightctl_resource` / `flightctl_image_builder` (no `flightctl apply`) |
+| `tasks/rhem_flightctl_apply_fleet_rest.yml` | Fleet-only: REST apply (workaround `flightctl.core` Fleet pydantic validation) |
+| `tasks/rhem_flightctl_bearer_oidc_password.yml` | Control-plane OIDC password bearer |
+| `tasks/rhem_flightctl_verify_fleet_rest.yml` | Fleet verify over REST |
 | `tasks/rhem_flightctl_wait_imagebuild.yml` | Poll `flightctl_image_builder_info` until build completes |
 | `tasks/rhem_flightctl_wait_imagepromotion.yml` | Poll `flightctl_resource_info` for `ImagePromotion` |
 | `tasks/rhem_flightctl_wait_imageexport.yml` | Poll `flightctl_image_builder_info` for `ImageExport` (QCOW2) |
@@ -315,8 +318,8 @@ ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
 
 | Tag | Main steps |
 |-----|------------|
-| `fleet` | Render `templates/fleets/lab-testbuild1-grafana.yaml.j2`, `flightctl_resource` `Fleet` |
-| `verify` | `flightctl_resource_info` and summary |
+| `fleet` | Render template, OIDC password grant, POST/PUT `/api/v1/fleets` (`rhem_flightctl_apply_fleet_rest.yml`; not `flightctl_resource`) |
+| `verify` | REST GET fleet + summary (`rhem_flightctl_verify_fleet_rest.yml`) |
 
 Set `rhem_fleet_grafana_enabled: false` to skip. The fleet can exist with **zero** members until a device is enrolled and labeled `fleet: <rhem_fleet_grafana_selector_label_value>` (enrollment not in this playbook).
 

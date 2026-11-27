@@ -25,12 +25,3 @@ spec:
             channel: testing
           ports:
             - "3000:3000"
-          inline:
-            - path: grafana-demo.container
-              content: |
-                [Container]
-                Image=docker.io/grafana/grafana:latest
-                PublishPort=3000:3000
-
-                [Install]
-                WantedBy=default.target

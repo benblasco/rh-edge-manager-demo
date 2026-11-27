@@ -14,9 +14,9 @@ You can create and apply the fleet **before any image-mode device exists**. Memb
 | Fleet name | `metadata.name` | `lab-testbuild1-grafana` |
 | Device selector | `spec.selector.matchLabels` | `fleet: lab-testbuild1-grafana` (label on **devices** in Phase B) |
 | OS catalog ref | `spec.template.spec.os.catalogItemRef` | `default` / `testbuild1` / `"1.0.0"` |
-| Application | `spec.template.spec.applications[]` | `grafana-demo`, `appType: quadlet`, `catalogItemRef`, `ports`, quadlet `inline` |
+| Application | `spec.template.spec.applications[]` | `grafana-demo`, `appType: quadlet`, `catalogItemRef`, `ports` (no `inline` when using `catalogItemRef` on this gateway) |
 
-Grafana `ports` and quadlet unit content live in the fleet template (not in the `CatalogItem` alone). See the [manual fleet example](README.catalog-quadlet.md#manual-fleet-manifest-reference) in the Grafana catalog doc.
+Grafana `ports` live in the fleet template; quadlet unit content comes from the **catalog item** when you use `catalogItemRef`. Do not add `inline` together with `catalogItemRef` — the API rejects it (`oneOf` schema error). See [README.catalog-quadlet.md](README.catalog-quadlet.md).
 
 Optional for a home lab: `configProviders`, `spec.resources`, `rolloutPolicy` — defer until you run multiple devices.
 
@@ -139,6 +139,8 @@ ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
 ```
 
 Variables: [`ansible/inventory/group_vars/rhem_servers/rhem_fleet_grafana.yml`](ansible/inventory/group_vars/rhem_servers/rhem_fleet_grafana.yml). Template: [`ansible/templates/fleets/lab-testbuild1-grafana.yaml.j2`](ansible/templates/fleets/lab-testbuild1-grafana.yaml.j2).
+
+The playbook applies the fleet over **gateway REST** (`tasks/rhem_flightctl_apply_fleet_rest.yml`) because `flightctl.core` **1.7.0** `flightctl_resource` rejects the same quadlet+catalog shape client-side (see comment in that task file). Tags: `fleet` (apply), `verify` (REST read-back).
 
 Set `rhem_fleet_grafana_enabled: false` to skip the playbook.
 

@@ -108,18 +108,18 @@ spec:
             channel: testing
           ports:
             - "3000:3000"
-          inline:
-            - path: grafana-demo.container
-              content: |
-                [Container]
-                Image=docker.io/grafana/grafana:latest
-                PublishPort=3000:3000
-
-                [Install]
-                WantedBy=default.target
 ```
 
-Devices need outbound access to pull `docker.io/grafana/grafana:latest` unless you change `artifacts[].uri` and the quadlet `Image=` line to a mirror (for example `micro.lan:5000/...`).
+On this lab gateway (RHEM 1.4), do **not** combine `catalogItemRef` with quadlet `inline` in the same application block — the API returns a schema `oneOf` error. Use `catalogItemRef` + `ports` only; RHEM renders the workload from the catalog item (`docker.io/grafana/grafana` via `grafana-demo` @ `1.0.0`). If you deploy without a catalog reference, use `image` + `inline` instead (not both `catalogItemRef` and `inline`).
+
+Devices need outbound access to pull `docker.io/grafana/grafana:latest` unless you change `artifacts[].uri` in the catalog item to a mirror (for example `micro.lan:5000/...`).
+
+**Verification (control plane):**
+
+```bash
+flightctl get fleet lab-testbuild1-grafana -o yaml
+getenforce
+```
 
 ## Lab notes
 

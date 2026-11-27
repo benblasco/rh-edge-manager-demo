@@ -1,0 +1,79 @@
+---
+# Apply a Fleet manifest with POST/PUT on /api/v1/fleets (raw JSON).
+#
+# flightctl.core 1.7.0+ validates Fleet specs in flightctl_resource via collection Pydantic
+# models before the HTTP request. Quadlet applications that use catalogItemRef with ports only
+# (no image/inline) are accepted by RHEM 1.4 but fail client-side, for example:
+#   QuadletApplication image — Input should be a valid string
+#   QuadletApplication inline — Input should be a valid list
+# Pinning an older flightctl.core collection is not recommended here: catalog/image modules
+# on the controller should stay on the version in requirements.yml; older releases are
+# untested against this lab and may lack ImageBuild API fixes.
+#
+# Required vars from caller:
+#   rhem_flightctl_apply_template — Jinja manifest path
+# Optional:
+#   rhem_flightctl_apply_name — fleet metadata.name override
+
+- name: Render Flight Control fleet manifest from template
+  ansible.builtin.set_fact:
+    rhem_flightctl_apply_definition: "{{ lookup('template', rhem_flightctl_apply_template) | from_yaml }}"
+  tags: [fleet]
+
+- name: Assert rendered resource is a Fleet
+  ansible.builtin.assert:
+    that:
+      - rhem_flightctl_apply_definition.kind == 'Fleet'
+    fail_msg: rhem_flightctl_apply_fleet_rest.yml expects kind Fleet.
+  tags: [fleet]
+
+- name: Obtain OIDC bearer for control-plane API
+  ansible.builtin.include_tasks: rhem_flightctl_bearer_oidc_password.yml
+  tags: [fleet]
+
+- name: Set fleet API resource name
+  ansible.builtin.set_fact:
+    rhem_flightctl_fleet_api_name: "{{ rhem_flightctl_apply_name | default(rhem_flightctl_apply_definition.metadata.name) }}"
+  tags: [fleet]
+
+- name: Query fleet on gateway (REST)
+  ansible.builtin.uri:
+    url: >-
+      {{ rhem_flightctl_connection.flightctl_host | regex_replace('/$', '') }}/api/v1/fleets/{{ rhem_flightctl_fleet_api_name }}
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rhem_flightctl_bearer_token }}"
+    validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    status_code: [200, 404]
+  register: rhem_flightctl_fleet_get
+  changed_when: false
+  tags: [fleet]
+
+- name: Create fleet on gateway (REST)
+  ansible.builtin.uri:
+    url: "{{ rhem_flightctl_connection.flightctl_host | regex_replace('/$', '') }}/api/v1/fleets"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ rhem_flightctl_bearer_token }}"
+    body_format: json
+    body: "{{ rhem_flightctl_apply_definition }}"
+    validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    status_code: [201]
+  register: rhem_flightctl_fleet_post
+  when: rhem_flightctl_fleet_get.status == 404
+  tags: [fleet]
+
+- name: Update fleet on gateway (REST)
+  ansible.builtin.uri:
+    url: >-
+      {{ rhem_flightctl_connection.flightctl_host | regex_replace('/$', '') }}/api/v1/fleets/{{ rhem_flightctl_fleet_api_name }}
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ rhem_flightctl_bearer_token }}"
+    body_format: json
+    body: "{{ rhem_flightctl_apply_definition }}"
+    validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    status_code: [200]
+  register: rhem_flightctl_fleet_put
+  when: rhem_flightctl_fleet_get.status == 200
+  tags: [fleet]

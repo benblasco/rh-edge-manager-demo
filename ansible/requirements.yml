@@ -4,5 +4,7 @@ collections:
   - name: ansible.posix
   - name: community.general
   - name: containers.podman
+  # Stay on current release for catalog/image modules. Fleet apply bypasses flightctl_resource
+  # when quadlet+catalogItemRef fails collection client validation (see rhem_flightctl_apply_fleet_rest.yml).
   - name: flightctl.core
     version: 1.7.0
