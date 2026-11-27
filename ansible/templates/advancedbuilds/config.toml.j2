@@ -1,0 +1,7 @@
+[[customizations.user]]
+name = "{{ rhem_advanced_qcow2_user_name }}"
+password = "{{ rhem_advanced_qcow2_user_password }}"
+{% if rhem_advanced_qcow2_ssh_public_key | default('') | length > 0 %}
+key = "{{ rhem_advanced_qcow2_ssh_public_key }}"
+{% endif %}
+groups = [{% for group in rhem_advanced_qcow2_user_groups %}"{{ group }}"{% if not loop.last %}, {% endif %}{% endfor %}]

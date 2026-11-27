@@ -1,0 +1,9 @@
+apiVersion: flightctl.io/v1alpha1
+kind: ImageExport
+metadata:
+  name: {{ rhem_imageexport_name }}
+spec:
+  source:
+    type: imageBuild
+    imageBuildRef: {{ rhem_imagebuild_name }}
+  format: {{ rhem_imageexport_format }}

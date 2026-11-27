@@ -1,0 +1,87 @@
+---
+# Exchange rhem_flightctl_refresh_token (vault) for a short-lived bearer token
+# used by flightctl_image_builder / flightctl_image_builder_info (/_/imagebuilder).
+# OIDC discovery uses the main gateway URL (rhem_flightctl_connection.flightctl_host).
+
+- name: Fetch Flight Control auth config
+  ansible.builtin.uri:
+    url: "{{ rhem_flightctl_connection.flightctl_host | regex_replace('/$', '') }}/api/v1/auth/config"
+    validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    return_content: true
+  register: rhem_flightctl_auth_config
+  changed_when: false
+  no_log: true
+
+- name: Select default OIDC provider when configured
+  ansible.builtin.set_fact:
+    rhem_flightctl_oidc_provider: >-
+      {{
+        rhem_flightctl_auth_config.json.providers | default([])
+        | selectattr('metadata.name', 'equalto', rhem_flightctl_auth_config.json.defaultProvider)
+        | selectattr('spec.providerType', 'equalto', 'oidc')
+        | list | first
+      }}
+  when: rhem_flightctl_auth_config.json.defaultProvider is defined
+  no_log: true
+
+- name: Select first OIDC provider as fallback
+  ansible.builtin.set_fact:
+    rhem_flightctl_oidc_provider: >-
+      {{
+        rhem_flightctl_auth_config.json.providers | default([])
+        | selectattr('spec.providerType', 'equalto', 'oidc')
+        | list | first
+      }}
+  when: rhem_flightctl_oidc_provider is not defined
+  no_log: true
+
+- name: Assert OIDC provider is available on the gateway
+  ansible.builtin.assert:
+    that:
+      - rhem_flightctl_oidc_provider is not none
+      - rhem_flightctl_oidc_provider.spec.issuer is defined
+      - rhem_flightctl_oidc_provider.spec.clientId is defined
+    fail_msg: >-
+      Gateway auth config has no OIDC provider; cannot exchange refresh token.
+  no_log: true
+
+- name: Fetch OIDC discovery document
+  ansible.builtin.uri:
+    url: "{{ rhem_flightctl_oidc_provider.spec.issuer | regex_replace('/$', '') }}/.well-known/openid-configuration"
+    validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    return_content: true
+  register: rhem_flightctl_oidc_discovery
+  changed_when: false
+  no_log: true
+
+- name: Exchange refresh token for bearer token
+  ansible.builtin.uri:
+    url: "{{ rhem_flightctl_oidc_discovery.json.token_endpoint }}"
+    method: POST
+    validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
+    body_format: form-urlencoded
+    body:
+      grant_type: refresh_token
+      refresh_token: "{{ rhem_flightctl_refresh_token }}"
+      client_id: "{{ rhem_flightctl_oidc_provider.spec.clientId }}"
+    status_code: [200]
+  register: rhem_flightctl_token_response
+  no_log: true
+
+- name: Set bearer token for Image Builder modules
+  ansible.builtin.set_fact:
+    rhem_flightctl_bearer_token: >-
+      {{
+        rhem_flightctl_token_response.json.id_token
+        | default(rhem_flightctl_token_response.json.access_token)
+      }}
+  no_log: true
+
+- name: Assert bearer token was issued
+  ansible.builtin.assert:
+    that:
+      - rhem_flightctl_bearer_token is defined
+      - rhem_flightctl_bearer_token | length > 0
+    fail_msg: >-
+      OIDC refresh response did not include id_token or access_token.
+  no_log: true

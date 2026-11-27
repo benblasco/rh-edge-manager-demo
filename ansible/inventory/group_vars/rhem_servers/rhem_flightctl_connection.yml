@@ -1,7 +1,10 @@
 ---
-# flightctl.core API connection (non-secret). Set rhem_pam_password in vault.yml.
+# flightctl.core API connection (non-secret). Secrets in vault.yml (password, refresh token).
 rhem_flightctl_connection:
   flightctl_host: "https://{{ rhem_fqdn }}"
   flightctl_username: "{{ rhem_pam_username }}"
   flightctl_password: "{{ rhem_pam_password }}"
   flightctl_validate_certs: "{{ not rhem_flightctl_login_insecure_tls | bool }}"
+
+# Image Builder service (ImageBuild / ImageExport) — not the main control-plane root URL.
+rhem_flightctl_image_builder_host: "https://{{ rhem_fqdn }}/_/imagebuilder"

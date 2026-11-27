@@ -34,3 +34,17 @@ rhem_advanced_catalog_category: system
 rhem_advanced_build_async: true
 rhem_advanced_build_poll: 60
 rhem_advanced_build_async_timeout: 7200
+
+# QCOW2 via bootc-image-builder (after podman build; image must be in local storage)
+rhem_advanced_qcow2_enabled: true
+rhem_advanced_qcow2_config_enabled: true
+rhem_advanced_bib_image: registry.redhat.io/rhel10/bootc-image-builder:latest
+rhem_advanced_qcow2_output_dir: "{{ rhem_advanced_build_dir }}/output"
+rhem_advanced_qcow2_disk_path: "{{ rhem_advanced_qcow2_output_dir }}/qcow2/disk.qcow2"
+rhem_advanced_qcow2_user_name: labuser
+rhem_advanced_qcow2_user_groups:
+  - wheel
+rhem_advanced_qcow2_ssh_public_key: ""
+rhem_advanced_qcow2_bib_async: true
+rhem_advanced_qcow2_bib_poll: 60
+rhem_advanced_qcow2_bib_async_timeout: 7200

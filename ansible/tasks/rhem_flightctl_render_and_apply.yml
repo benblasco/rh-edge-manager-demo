@@ -24,6 +24,25 @@
   when: rhem_flightctl_apply_definition.kind == 'ImageBuild'
   no_log: true
 
+- name: Query ImageExport before create
+  flightctl.core.flightctl_image_builder_info:
+    kind: ImageExport
+    name: "{{ rhem_flightctl_apply_name | default(rhem_flightctl_apply_definition.metadata.name) }}"
+  register: rhem_flightctl_imageexport_lookup
+  changed_when: false
+  when: rhem_flightctl_apply_definition.kind == 'ImageExport'
+  no_log: true
+
+- name: Ensure ImageExport is present via image builder API
+  flightctl.core.flightctl_image_builder:
+    kind: ImageExport
+    state: present
+    resource_definition: "{{ rhem_flightctl_apply_definition }}"
+  when:
+    - rhem_flightctl_apply_definition.kind == 'ImageExport'
+    - rhem_flightctl_imageexport_lookup.result.data | default([]) | length == 0
+  no_log: true
+
 - name: Ensure Flight Control resource is present
   flightctl.core.flightctl_resource:
     kind: "{{ rhem_flightctl_apply_definition.kind }}"
@@ -33,5 +52,5 @@
          | default(rhem_flightctl_apply_definition.metadata.catalog | default(omit)) }}
     state: present
     resource_definition: "{{ rhem_flightctl_apply_definition }}"
-  when: rhem_flightctl_apply_definition.kind != 'ImageBuild'
+  when: rhem_flightctl_apply_definition.kind not in ['ImageBuild', 'ImageExport']
   no_log: true

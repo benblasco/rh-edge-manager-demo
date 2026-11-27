@@ -29,7 +29,21 @@ rhem_imagebuild_name: testbuild1
 rhem_imagebuild_dest_image: testbuild1
 rhem_imagebuild_dest_tag: latest
 rhem_imagebuild_binding: early
-rhem_imagebuild_export_formats: []
+# ImagePromotion exportFormats (omit container on lab gateway 1.4.1)
+rhem_imagebuild_promotion_export_qcow2: true
+rhem_imagebuild_export_formats: >-
+  {{ ['qcow2'] if (rhem_imagebuild_promotion_export_qcow2 | bool and rhem_imageexport_enabled | bool) else [] }}
+
+# QCOW2 ImageExport (after ImageBuild completes)
+rhem_imageexport_enabled: true
+rhem_imageexport_apply: "{{ rhem_imageexport_enabled }}"
+rhem_imageexport_name: "{{ rhem_imagebuild_name }}-qcow2"
+rhem_imageexport_format: qcow2
+rhem_imageexport_wait_complete: true
+rhem_imageexport_wait_retries: 180
+rhem_imageexport_wait_delay: 10
+rhem_imageexport_download_enabled: false
+rhem_imageexport_download_path: "./{{ rhem_imagebuild_name }}-disk.qcow2"
 
 rhem_imagebuild_apply_repositories: true
 rhem_imagebuild_apply_build: true

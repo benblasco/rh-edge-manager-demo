@@ -20,6 +20,19 @@
           Set registry credentials in vault.yml (registry.redhat.io login).
       tags: [always]
 
+    - name: Require vault secret for QCOW2 config.toml user password
+      ansible.builtin.assert:
+        that:
+          - rhem_advanced_qcow2_user_password is defined
+          - rhem_advanced_qcow2_user_password | length > 0
+          - rhem_advanced_qcow2_user_password != 'CHANGEME'
+        fail_msg: >-
+          Set rhem_advanced_qcow2_user_password in vault.yml for bootc-image-builder config.toml.
+      when:
+        - rhem_advanced_qcow2_enabled | bool
+        - rhem_advanced_qcow2_config_enabled | bool
+      tags: [always]
+
   tasks:
     - name: Enable Edge Manager content repository on build host
       community.general.rhsm_repository:
@@ -127,6 +140,90 @@
         cmd: podman push {{ rhem_advanced_oci_image_ref }}
       tags: [push]
 
+    - name: Ensure QCOW2 output directory exists
+      ansible.builtin.file:
+        path: "{{ rhem_advanced_qcow2_output_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: rhem_advanced_qcow2_enabled | bool
+      tags: [qcow2]
+
+    - name: Render bootc-image-builder config.toml
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/advancedbuilds/config.toml.j2"
+        dest: "{{ rhem_advanced_build_dir }}/config.toml"
+        owner: root
+        group: root
+        mode: "0600"
+      when:
+        - rhem_advanced_qcow2_enabled | bool
+        - rhem_advanced_qcow2_config_enabled | bool
+      no_log: true
+      tags: [qcow2]
+
+    - name: Pull bootc-image-builder container image
+      ansible.builtin.command:
+        cmd: podman pull {{ rhem_advanced_bib_image }}
+      changed_when: true
+      when: rhem_advanced_qcow2_enabled | bool
+      tags: [qcow2]
+
+    - name: Build bootc-image-builder argument list
+      ansible.builtin.set_fact:
+        rhem_advanced_bib_argv: >-
+          {{
+            [
+              'podman', 'run', '--rm', '--privileged', '--pull=newer',
+              '--security-opt', 'label=type:unconfined_t',
+              '-v', '/var/lib/containers/storage:/var/lib/containers/storage:Z',
+              '-v', rhem_advanced_build_dir ~ '/config.toml:/config.toml:Z',
+              '-v', rhem_advanced_qcow2_output_dir ~ ':/output:Z',
+              rhem_advanced_bib_image,
+              '--type', 'qcow2',
+              '--config', '/config.toml',
+              rhem_advanced_oci_image_ref,
+            ]
+            if rhem_advanced_qcow2_config_enabled | bool
+            else [
+              'podman', 'run', '--rm', '--privileged', '--pull=newer',
+              '--security-opt', 'label=type:unconfined_t',
+              '-v', '/var/lib/containers/storage:/var/lib/containers/storage:Z',
+              '-v', rhem_advanced_qcow2_output_dir ~ ':/output:Z',
+              rhem_advanced_bib_image,
+              '--type', 'qcow2',
+              rhem_advanced_oci_image_ref,
+            ]
+          }}
+      when: rhem_advanced_qcow2_enabled | bool
+      tags: [qcow2]
+
+    - name: Build QCOW2 disk image with bootc-image-builder
+      ansible.builtin.command:
+        argv: "{{ rhem_advanced_bib_argv }}"
+      async: "{{ rhem_advanced_qcow2_bib_async_timeout if rhem_advanced_qcow2_bib_async | bool else 0 }}"
+      poll: "{{ rhem_advanced_qcow2_bib_poll if rhem_advanced_qcow2_bib_async | bool else 0 }}"
+      when: rhem_advanced_qcow2_enabled | bool
+      tags: [qcow2]
+
+    - name: Assert QCOW2 disk image exists
+      ansible.builtin.stat:
+        path: "{{ rhem_advanced_qcow2_disk_path }}"
+      register: rhem_advanced_qcow2_stat
+      when: rhem_advanced_qcow2_enabled | bool
+      tags: [qcow2, verify]
+
+    - name: Verify QCOW2 disk image was created
+      ansible.builtin.assert:
+        that:
+          - rhem_advanced_qcow2_stat.stat.exists | default(false)
+          - rhem_advanced_qcow2_stat.stat.size | default(0) > 0
+        fail_msg: >-
+          Expected QCOW2 at {{ rhem_advanced_qcow2_disk_path }} after bootc-image-builder.
+      when: rhem_advanced_qcow2_enabled | bool
+      tags: [qcow2, verify]
+
     - name: List local advanced image
       ansible.builtin.command:
         cmd: podman images {{ rhem_advanced_oci_image_ref }}
@@ -149,6 +246,7 @@
       ansible.builtin.debug:
         msg:
           - "Advanced image: {{ rhem_advanced_oci_image_ref }}"
+          - "QCOW2 disk: {{ rhem_advanced_qcow2_disk_path if rhem_advanced_qcow2_enabled | bool else 'disabled' }}"
           - "Registry tags probe HTTP status: {{ rhem_advanced_registry_probe.status | default('skipped') }}"
       tags: [verify]
 

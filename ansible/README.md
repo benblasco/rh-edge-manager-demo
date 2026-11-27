@@ -25,8 +25,10 @@ Automates the connected install described in [../README.rhem-install-rpm.md](../
 | `tasks/rhem_flightctl_render_and_apply.yml` | Shared: Jinja → `flightctl_resource` / `flightctl_image_builder` (no `flightctl apply`) |
 | `tasks/rhem_flightctl_wait_imagebuild.yml` | Poll `flightctl_image_builder_info` until build completes |
 | `tasks/rhem_flightctl_wait_imagepromotion.yml` | Poll `flightctl_resource_info` for `ImagePromotion` |
-| `templates/imagebuilds/*.j2` | API manifests for Repository, ImageBuild, ImagePromotion (rendered on controller) |
-| `templates/advancedbuilds/*.j2` | Containerfile, registry drop-in, advanced `CatalogItem` |
+| `tasks/rhem_flightctl_wait_imageexport.yml` | Poll `flightctl_image_builder_info` for `ImageExport` (QCOW2) |
+| `tasks/rhem_flightctl_bearer_from_refresh.yml` | OIDC refresh → bearer for Image Builder API modules |
+| `templates/imagebuilds/*.j2` | API manifests for Repository, ImageBuild, ImageExport, ImagePromotion (rendered on controller) |
+| `templates/advancedbuilds/*.j2` | Containerfile, `config.toml`, registry drop-in, advanced `CatalogItem` |
 | `templates/fleets/*.j2` | Fleet definitions (e.g. Grafana quadlet + `catalogItemRef`) |
 | `files/imagebuilder-worker-subscription.conf` | Quadlet drop-in for RHSM mounts on the worker |
 | `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml` | Simplified ImageBuild variables (non-secret) |
@@ -41,11 +43,13 @@ Edit `inventory/group_vars/rhem_servers/rhem.yml` for FQDN, RHSM repo id, firewa
 
 Secrets in `vault.yml` (copy from `vault.yml.example`):
 
-- `rhem_pam_password` — PAM issuer UI user password
+- `rhem_pam_password` — PAM issuer UI user password (control-plane `flightctl_resource*` via OIDC password grant)
+- `rhem_flightctl_refresh_token` — OIDC **refresh token** for `flightctl_image_builder*` (ImageBuild / ImageExport on `/_/imagebuilder`)
 - `rhem_registry_username` / `rhem_registry_password` — Red Hat registry login (host `podman login` and OCI `Repository` ociAuth)
+- `rhem_advanced_qcow2_user_password` — `bootc-image-builder` `config.toml` user password (advanced QCOW2)
 - Optional: `rhem_built_registry_username` / `rhem_built_registry_password` — private push registry auth
 
-Image-build toggles and registry hostnames: `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml`. Advanced build names, packages, and binding: `rhem_advanced_imagebuilds.yml`.
+Image-build toggles, `ImageExport`, and registry hostnames: `inventory/group_vars/rhem_servers/rhem_imagebuilds.yml`. Advanced build names, QCOW2, packages, and binding: `rhem_advanced_imagebuilds.yml`.
 
 ## Collections and controller Python
 
@@ -83,6 +87,18 @@ ansible-vault encrypt inventory/group_vars/rhem_servers/vault.yml
 ```
 
 For a lab-only host you may leave `vault.yml` unencrypted (still gitignored); do not commit it.
+
+### Image Builder API refresh token (`rhem_flightctl_refresh_token`)
+
+`flightctl_image_builder` and `flightctl_image_builder_info` call **`https://{{ rhem_fqdn }}/_/imagebuilder`** (see `rhem_flightctl_image_builder_host` in `rhem_flightctl_connection.yml`). Password auth is resolved against the **main** gateway URL, so playbooks exchange a vault-stored **OIDC refresh token** for a short-lived bearer token at the start of the localhost API play.
+
+Obtain the refresh token once from a machine where you already ran `flightctl login` (control node or admin workstation — not committed to git):
+
+```bash
+grep '^  refresh-token:' ~/.config/flightctl/client.yaml | awk '{print $2}'
+```
+
+Paste the value into `vault.yml` as `rhem_flightctl_refresh_token`. When the refresh token is rotated or revoked, update vault and re-run the playbook. Do not store access or id tokens in vault; they expire quickly.
 
 ## Run
 
@@ -139,14 +155,16 @@ ansible-playbook playbooks/rhem-image-builds.yml --ask-vault-pass
 1. **`worker`** — Quadlet subscription drop-in, `imagebuilderWorker` keys in `service-config.yaml`, worker running ([product doc](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_configuring_imagebuilder_worker_subscription_rhel))
 2. **`repositories`** (localhost) — `flightctl_resource` for OCI `Repository` manifests from `templates/imagebuilds/` ([OCI repository](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-configuring_an_oci_repository))
 3. **`imagebuild`** (localhost) — `flightctl_image_builder` for `ImageBuild`; optional wait via `flightctl_image_builder_info`
-4. **`promotion`** (localhost) — `flightctl_resource` for `ImagePromotion` when `rhem_imagebuild_promotion_enabled: true` ([publish from CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_image_build_catalog_cli))
-5. **`verify`** — Worker and registry on host; API `flightctl_resource_info` / `flightctl_image_builder_info` on localhost
+4. **`imageexport`** (localhost) — `flightctl_image_builder` `ImageExport` QCOW2 when `rhem_imageexport_enabled: true`; runs **before** promotion when catalog includes disk formats
+5. **`promotion`** (localhost) — `flightctl_resource` for `ImagePromotion` when `rhem_imagebuild_promotion_enabled: true` ([publish from CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_image_build_catalog_cli)); default lab adds `exportFormats: [qcow2]` when export is enabled (not `container` on gateway 1.4.1)
+6. **`verify`** — Worker and registry on host; API `flightctl_resource_info` / `flightctl_image_builder_info` on localhost
 
 | Tag | Main steps |
 |-----|------------|
 | `worker` | RHSM mounts, `rpmRepoAdd` / `rpmRepoEnable`, worker service |
 | `repositories` | `registry-redhat-io` and built-registry `Repository` resources |
 | `imagebuild` | Apply `ImageBuild` (waits by default when promotion is enabled via `rhem_imagebuild_wait_complete`) |
+| `imageexport` | Apply `ImageExport` (`testbuild1-qcow2`); optional `flightctl download` when `rhem_imageexport_download_enabled` |
 | `promotion` | Software Catalog `ImagePromotion` (waits via `rhem_imagepromotion_wait_complete` when enabled) |
 | `verify` | Post-config checks |
 
@@ -156,7 +174,15 @@ Configure worker and repos only (no build):
 ansible-playbook playbooks/rhem-image-builds.yml --tags worker,repositories --ask-vault-pass
 ```
 
-A full run with default lab vars can take **30+ minutes** while the worker completes the build and promotion (`rhem_imagebuild_wait_complete` / `rhem_imagepromotion_wait_complete`). Set those to `false` for a quick manifest-only apply, then re-run with `--tags imagebuild,promotion,verify` after the build finishes.
+A full run with default lab vars can take **30+ minutes** while the worker completes the build, QCOW2 export, and promotion (`rhem_imagebuild_wait_complete`, `rhem_imageexport_wait_complete`, `rhem_imagepromotion_wait_complete`). Set those to `false` for a quick manifest-only apply, then re-run with `--tags imagebuild,imageexport,promotion,verify` after the build finishes.
+
+QCOW2 export only (build already complete):
+
+```bash
+ansible-playbook playbooks/rhem-image-builds.yml --tags imageexport,verify --ask-vault-pass
+```
+
+Disable catalog QCOW2 artifact but keep file export: set `rhem_imagebuild_promotion_export_qcow2: false` in `rhem_imagebuilds.yml`. Disable export entirely: `rhem_imageexport_enabled: false`.
 
 RHEL verification after image-build playbook:
 
@@ -167,6 +193,7 @@ sudo systemctl is-active flightctl-imagebuilder-worker.service
 # On Ansible controller (re-run verify tag or CLI on gateway)
 ansible-playbook playbooks/rhem-image-builds.yml --tags verify --ask-vault-pass
 flightctl get repository
+flightctl get imageexport/testbuild1-qcow2
 flightctl get imagepromotion/testbuild1-promotion
 flightctl logs imagebuild/testbuild1 -f
 ```
@@ -227,8 +254,9 @@ ansible-playbook playbooks/rhem-image-builds-advanced.yml --ask-vault-pass
 3. **`context`** — Build directory and rendered `Containerfile`
 4. **`build`** — `podman build` (async; may take 30+ minutes)
 5. **`push`** — `podman push` to `micro.lan:5000/advancedbuild1:latest`
-6. **`promotion`** — Apply `CatalogItem` to the Software Catalog (not `ImagePromotion`; there is no `ImageBuild` on this path)
-7. **`verify`** — Registry probe, API/CLI catalog item lookup
+6. **`qcow2`** — `bootc-image-builder` → `${rhem_advanced_build_dir}/output/qcow2/disk.qcow2` (default lab `config.toml` user from vault)
+7. **`promotion`** — Apply `CatalogItem` to the Software Catalog (not `ImagePromotion`; there is no `ImageBuild` on this path)
+8. **`verify`** — Registry probe, QCOW2 path, API/CLI catalog item lookup
 
 | Tag | Main steps |
 |-----|------------|
@@ -237,8 +265,9 @@ ansible-playbook playbooks/rhem-image-builds-advanced.yml --ask-vault-pass
 | `context` | `/etc/flightctl/advancedbuilds/advancedbuild1` layout |
 | `build` | `podman build` |
 | `push` | Push to lab registry |
+| `qcow2` | `config.toml`, pull `rhel10/bootc-image-builder`, privileged `podman run` |
 | `promotion` (localhost) | `flightctl_resource` `CatalogItem` (`rhem_advanced_catalog_enabled`) |
-| `verify` | Podman image, registry tags, catalog item listing |
+| `verify` | Podman image, registry tags, QCOW2 stat, catalog item listing |
 
 Render context and renew enrollment cert only (no rebuild):
 
@@ -254,18 +283,32 @@ Catalog only after a manual or prior `podman push`:
 ansible-playbook playbooks/rhem-image-builds-advanced.yml --tags promotion,verify --ask-vault-pass
 ```
 
+QCOW2 only (image already built and in local Podman storage):
+
+```bash
+ansible-playbook playbooks/rhem-image-builds-advanced.yml --tags qcow2,verify --ask-vault-pass
+```
+
+Set `rhem_advanced_qcow2_enabled: false` to skip disk export. Set `rhem_advanced_qcow2_config_enabled: false` to run `bootc-image-builder` without `config.toml` (no console user baked in).
+
 RHEL verification after advanced build (target host):
 
 ```bash
+getenforce
+dnf list installed podman
 sudo podman images micro.lan:5000/advancedbuild1:latest
+sudo podman images registry.redhat.io/rhel10/bootc-image-builder
 curl -kfsS "https://micro.lan:5000/v2/advancedbuild1/tags/list"
+test -f /etc/flightctl/advancedbuilds/advancedbuild1/output/qcow2/disk.qcow2
 flightctl get catalogitem advancedbuild1 --catalog default
 flightctl get catalogitems --catalog default
 ```
 
-## Fleet: Grafana quadlet
+## Fleet: `testbuild1` OS + Grafana quadlet
 
-After `rhem-catalog-grafana-demo.yml` registers the catalog item:
+Manual: [README.fleets-basic.md](../README.fleets-basic.md). After catalog items **`testbuild1`** (image builds playbook) and **`grafana-demo`** exist:
+
+Optional gateway CLI checks (when the RHEM host is available): [README.fleets-basic.md — Optional `flightctl` catalog checks](../README.fleets-basic.md#optional-flightctl-catalog-checks-when-the-gateway-is-available).
 
 ```bash
 ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
@@ -273,10 +316,10 @@ ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
 
 | Tag | Main steps |
 |-----|------------|
-| `fleet` | Render `templates/fleets/grafana-demo.yaml.j2`, `flightctl_resource` `Fleet` |
+| `fleet` | Render `templates/fleets/lab-testbuild1-grafana.yaml.j2`, `flightctl_resource` `Fleet` |
 | `verify` | `flightctl_resource_info` and summary |
 
-Set `rhem_fleet_grafana_enabled: false` to skip. Devices must carry label `fleet: <rhem_fleet_grafana_name>` (enrollment not in this playbook).
+Set `rhem_fleet_grafana_enabled: false` to skip. The fleet can exist with **zero** members until a device is enrolled and labeled `fleet: <rhem_fleet_grafana_selector_label_value>` (enrollment not in this playbook).
 
 ## RHEL verification (on the target after a successful run)
 

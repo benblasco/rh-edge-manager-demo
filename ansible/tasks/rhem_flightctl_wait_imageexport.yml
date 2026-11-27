@@ -1,0 +1,39 @@
+---
+# Wait until an ImageExport reaches a terminal phase.
+# Required: rhem_imageexport_name
+
+- name: Wait for ImageExport to finish
+  flightctl.core.flightctl_image_builder_info:
+    kind: ImageExport
+    name: "{{ rhem_imageexport_name }}"
+  register: rhem_flightctl_imageexport_wait
+  until: >-
+    rhem_flightctl_imageexport_wait.result.data | default([]) | length > 0
+    and rhem_flightctl_imageexport_wait.result.data[0].status is defined
+    and rhem_flightctl_imageexport_wait.result.data[0].status.conditions is defined
+    and (
+      rhem_flightctl_imageexport_wait.result.data[0].status.conditions
+      | selectattr('type', 'equalto', 'Ready')
+      | list | length > 0
+    )
+    and (
+      rhem_flightctl_imageexport_wait.result.data[0].status.conditions
+      | selectattr('type', 'equalto', 'Ready')
+      | list | first
+    ).reason in ['Completed', 'Failed']
+  retries: "{{ rhem_imageexport_wait_retries }}"
+  delay: "{{ rhem_imageexport_wait_delay }}"
+  changed_when: false
+
+- name: Assert ImageExport completed successfully
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          rhem_flightctl_imageexport_wait.result.data[0].status.conditions
+          | selectattr('type', 'equalto', 'Ready')
+          | list | first
+        ).reason == 'Completed'
+    fail_msg: >-
+      ImageExport {{ rhem_imageexport_name }} did not complete:
+      {{ rhem_flightctl_imageexport_wait.result.data[0].status | default('unknown') }}

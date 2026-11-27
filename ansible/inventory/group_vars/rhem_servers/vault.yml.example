@@ -6,6 +6,12 @@ rhem_pam_password: CHANGEME
 rhem_registry_username: CHANGEME
 rhem_registry_password: CHANGEME
 
+# OIDC refresh token for flightctl_image_builder* on the controller (see ansible/README.md).
+rhem_flightctl_refresh_token: CHANGEME
+
 # Optional — only when the built-image registry requires authentication (see rhem_imagebuilds.yml)
 # rhem_built_registry_username: CHANGEME
 # rhem_built_registry_password: CHANGEME
+
+# bootc-image-builder config.toml user password (advanced QCOW2 export)
+rhem_advanced_qcow2_user_password: CHANGEME

@@ -1,15 +1,20 @@
 ---
-# Grafana quadlet fleet (API play). Requires catalog item from rhem-catalog-grafana-demo.yml.
-
+# Demo fleet: testbuild1 OS + grafana-demo quadlet (see README.fleets-basic.md).
 rhem_fleet_grafana_enabled: true
-rhem_fleet_grafana_name: grafana-demo-fleet
+rhem_fleet_grafana_name: lab-testbuild1-grafana
+rhem_fleet_grafana_selector_label_key: fleet
+rhem_fleet_grafana_selector_label_value: lab-testbuild1-grafana
+rhem_fleet_grafana_metadata_label_purpose: demo
 
-rhem_fleet_grafana_catalog_name: "{{ rhem_catalog_grafana_catalog_name | default('default') }}"
-rhem_fleet_grafana_catalog_item_name: "{{ rhem_catalog_grafana_item_name | default('grafana-demo') }}"
-rhem_fleet_grafana_catalog_item_version: "1.0.0"
-rhem_fleet_grafana_catalog_channel: testing
+rhem_fleet_grafana_os_catalog_name: default
+rhem_fleet_grafana_os_item_name: testbuild1
+rhem_fleet_grafana_os_item_version: "1.0.0"
 
 rhem_fleet_grafana_app_name: grafana-demo
-rhem_fleet_grafana_publish_port: "3000:3000"
-rhem_fleet_grafana_quadlet_unit: grafana-demo.container
+rhem_fleet_grafana_app_catalog_name: default
+rhem_fleet_grafana_app_item_name: grafana-demo
+rhem_fleet_grafana_app_item_version: "1.0.0"
+rhem_fleet_grafana_app_channel: testing
 rhem_fleet_grafana_container_image: docker.io/grafana/grafana:latest
+rhem_fleet_grafana_publish_ports:
+  - "3000:3000"

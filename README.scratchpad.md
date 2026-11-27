@@ -72,7 +72,16 @@ flightctl apply -f catalog/applications/grafana-demo/catalogitem.yaml
 flightctl get catalogitem grafana-demo --catalog default
 ```
 
-Fleet consumption (`appType: quadlet` + `catalogItemRef`) is a separate task; stub in the catalog README.
+### Fleet (`testbuild1` OS + Grafana)
+
+Write-up: [README.fleets-basic.md](README.fleets-basic.md). Manifest: `fleets/lab-testbuild1-grafana.yaml`. You can apply the fleet on the gateway **before** any image-mode device exists — membership stays empty until a device gets label `fleet: lab-testbuild1-grafana`.
+
+```bash
+cd ansible
+ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
+```
+
+Or manual on the RHEM host: `flightctl apply -f fleets/lab-testbuild1-grafana.yaml`.
 
 ## High level flow
 
@@ -95,7 +104,7 @@ Shared image-build setup:
 3. `podman build` / `podman push` to the lab registry
 4. Register the image in the Software Catalog (`CatalogItem`; no `ImagePromotion`)
 
-After catalog registration: fleets, devices, rollouts ([README.image-builds-advanced.md](README.image-builds-advanced.md)).
+After catalog registration: fleets ([README.fleets-basic.md](README.fleets-basic.md)), devices, rollouts ([README.image-builds-advanced.md](README.image-builds-advanced.md)).
 
 ```mermaid
 flowchart TD

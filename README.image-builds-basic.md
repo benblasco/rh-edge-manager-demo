@@ -4,7 +4,7 @@ Connected RPM control plane on RHEL 10 for host `rhem.hex.blasco.id.au`. This pr
 
 **Requires a working RHEM install:** [README.rhem-install-rpm.md](README.rhem-install-rpm.md). **CLI login:** [README.rhem-use.md](README.rhem-use.md).
 
-**Automated setup (worker, OCI repos, ImageBuild, catalog promotion):** [ansible/README.md](ansible/README.md) — playbook `ansible/playbooks/rhem-image-builds.yml` and Jinja2 manifests under `ansible/templates/imagebuilds/`. Lab defaults publish to the Software Catalog via `ImagePromotion` after the build completes (`rhem_imagebuild_promotion_enabled: true` in `rhem_imagebuilds.yml`).
+**Automated setup (worker, OCI repos, ImageBuild, QCOW2 `ImageExport`, catalog promotion):** [ansible/README.md](ansible/README.md) — playbook `ansible/playbooks/rhem-image-builds.yml` and Jinja2 manifests under `ansible/templates/imagebuilds/`. Lab defaults publish to the Software Catalog via `ImagePromotion` after the build completes (`rhem_imagebuild_promotion_enabled: true` in `rhem_imagebuilds.yml`) and optionally export QCOW2 (`rhem_imageexport_enabled` in the same file).
 
 Official guides:
 
@@ -62,10 +62,11 @@ Builder service images (`podman`, `bootc-image-builder`, `syft`) on a **private 
 | `CATALOG_NAME` / `CATALOG_ITEM` | `default` / `testbuild1` | Target Software Catalog and item name |
 | `CATALOG_DISPLAY_NAME` | Lab RHEL 10 early-binding image | UI label for the catalog item |
 | `CATALOG_ITEM_VERSION` | `1.0.0` | Catalog item version string |
+| `IMAGE_EXPORT_NAME` | `testbuild1-qcow2` | `ImageExport` metadata name (QCOW2 disk) |
 
 Replace registry credentials in the YAML below with your values (for example the same `registry.redhat.io` user as in `ansible/inventory/group_vars/rhem_servers/vault.yml`). Do not commit real passwords to git.
 
-Non-secret image-build defaults live in `ansible/inventory/group_vars/rhem_servers/rhem_imagebuilds.yml`; rendered manifests are written to `rhem_imagebuild_manifest_dir` on the RHEM host (default `/etc/flightctl/imagebuild-manifests`). The Ansible playbook uses **HTTPS** and `skipServerVerification: true` for `micro.lan:5000` per those vars; manual examples below may show plain HTTP where that matches an older lab setup—align `scheme` on the OCI `Repository` with your registry.
+Non-secret image-build defaults live in `ansible/inventory/group_vars/rhem_servers/rhem_imagebuilds.yml`. ImageBuild and ImageExport are applied from the controller via `flightctl.core` (see `ansible/README.md` for the vault refresh token). The Ansible playbook uses **HTTPS** and `skipServerVerification: true` for `micro.lan:5000` per those vars; manual examples below may show plain HTTP where that matches an older lab setup—align `scheme` on the OCI `Repository` with your registry.
 
 ## Mount subscription data into the image builder worker
 
@@ -236,6 +237,49 @@ curl -sS "http://micro.lan:5000/v2/testbuild1/tags/list"
 
 Build lifecycle and retries: [Build status and logs](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_edge_mgr_build_images_simple#build-status-and-logs_edge-manager-simple-image-workflow).
 
+## Export QCOW2 disk image (ImageExport)
+
+You do **not** need a `config.toml`, osbuild blueprint, or changes to the `ImageBuild` manifest for a standard QCOW2 export. The image builder worker runs the export after you create an **`ImageExport`** resource that references the completed build.
+
+### Mandatory configuration
+
+| Required | Notes |
+| --- | --- |
+| Completed `ImageBuild` (`testbuild1`) | Export tasks fail if the build is not `Ready=Completed`. |
+| Image builder worker active | Same worker used for the build ([mount subscription data](#mount-subscription-data-into-the-image-builder-worker)). |
+| OCI `Repository` resources | Already required for the build; no extra registry for QCOW2 download. |
+| **Not required** | `config.toml`, Composer blueprint, or `exportFormats` on `ImageBuild`. |
+
+Product procedure: [Build images with the simplified workflow — Image export](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_edge_mgr_build_images_simple).
+
+After `testbuild1` completes, create `imageexport-testbuild1-qcow2.yaml`:
+
+```yaml
+apiVersion: flightctl.io/v1alpha1
+kind: ImageExport
+metadata:
+  name: testbuild1-qcow2
+spec:
+  source:
+    type: imageBuild
+    imageBuildRef: testbuild1
+  format: qcow2
+```
+
+Apply, monitor, and download:
+
+```bash
+flightctl apply -f imageexport-testbuild1-qcow2.yaml
+flightctl get imageexport/testbuild1-qcow2
+flightctl logs imageexport/testbuild1-qcow2 -f
+flightctl download imageexport/testbuild1-qcow2 ./disk.qcow2
+test -f ./disk.qcow2
+```
+
+Other disk formats use the same manifest with `format: iso` or `format: vmdk`. Export can take several minutes after the container build finishes.
+
+**Order with catalog promotion:** If the Software Catalog item should include a QCOW2 artifact, complete the `ImageExport` first, then apply `ImagePromotion` with `exportFormats: [qcow2]` (see below). Promotion may remain `WaitingForArtifacts` until the export succeeds.
+
 ## Publish to Software Catalog
 
 The CLI does not mirror the UI “Publish to Software Catalog” toggle at create time. **After `testbuild1` completes**, publish with an `ImagePromotion` so fleets and rollouts can use a catalog item reference. See [Publish from the CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_image_build_catalog_cli) and [Image promotion and catalog publication](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_image_promotion).
@@ -255,6 +299,8 @@ metadata:
 spec:
   source:
     imageBuildRef: testbuild1
+    exportFormats:
+      - qcow2
   target:
     type: NewCatalogItem
     catalogName: default
@@ -262,6 +308,10 @@ spec:
     displayName: Lab RHEL 10 early-binding image
     version: "1.0.0"
 ```
+
+Create `ImageExport` for `qcow2` **before** applying this promotion if you use `exportFormats: [qcow2]` ([Publish from the CLI](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-proc_image_build_catalog_cli)).
+
+To publish only the bootc container reference, omit `exportFormats` entirely (lab Ansible default when QCOW2 catalog artifacts are disabled).
 
 Apply and wait until `status.phase` is `Completed`:
 
@@ -271,11 +321,7 @@ flightctl get imagepromotion/testbuild1-promotion -o yaml
 flightctl get catalogitems --catalog default
 ```
 
-Omit `exportFormats` to publish the bootc container reference from a completed build. On this lab gateway (1.4.1), `flightctl apply` rejects `exportFormats: [container]` even though the product docs show it—omit the field or list only disk formats after you create matching `ImageExport` resources (`qcow2`, `iso`, `vmdk`; [Image export](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_edge_mgr_build_images_simple)).
-
-### Optional: disk export (ISO, QCOW2, VMDK)
-
-Create a separate `ImageExport` after the build. Example and download steps: [Build images with the simplified workflow — Image export](https://docs.redhat.com/en/documentation/red_hat_edge_manager/1.4/configure-con_edge_mgr_build_images_simple).
+On this lab gateway (1.4.1), `flightctl apply` rejects `exportFormats: [container]` even though the product docs show it—omit `container` or list only disk formats after matching `ImageExport` resources exist (`qcow2`, `iso`, `vmdk`).
 
 ## Verification
 
@@ -284,9 +330,11 @@ dnf list installed flightctl-cli
 sudo systemctl is-active flightctl-imagebuilder-worker.service
 flightctl get repository
 flightctl get imagebuild/testbuild1
+flightctl get imageexport/testbuild1-qcow2
 flightctl get imagepromotion/testbuild1-promotion
 flightctl get catalogitems --catalog default
 curl -kfsS "https://micro.lan:5000/v2/testbuild1/tags/list"
+test -f ./disk.qcow2
 ```
 
 ## References

@@ -1,0 +1,36 @@
+apiVersion: flightctl.io/v1beta1
+kind: Fleet
+metadata:
+  name: lab-testbuild1-grafana
+  labels:
+    purpose: demo
+spec:
+  selector:
+    matchLabels:
+      fleet: lab-testbuild1-grafana
+  template:
+    spec:
+      os:
+        catalogItemRef:
+          catalog: default
+          item: testbuild1
+          version: "1.0.0"
+      applications:
+        - name: grafana-demo
+          appType: quadlet
+          catalogItemRef:
+            catalog: default
+            item: grafana-demo
+            version: "1.0.0"
+            channel: testing
+          ports:
+            - "3000:3000"
+          inline:
+            - path: grafana-demo.container
+              content: |
+                [Container]
+                Image=docker.io/grafana/grafana:latest
+                PublishPort=3000:3000
+
+                [Install]
+                WantedBy=default.target

@@ -6,7 +6,7 @@ Register an **application** catalog item with `spec.type: quadlet` so fleets dep
 podman run -d --rm --name grafana-demo -p 3000:3000 docker.io/grafana/grafana:latest
 ```
 
-Catalog registration only. Assigning the item to a fleet or device is a separate step.
+Catalog registration only. Assigning the item to a fleet or device is a separate step — see [README.fleets-basic.md](README.fleets-basic.md) for the combined `testbuild1` + Grafana fleet (you can apply that fleet with **zero** matching devices; membership fills in after enrollment and labels).
 
 ## Quadlet vs container catalog type
 
@@ -77,16 +77,18 @@ RHEM gateway host (optional CLI):
 flightctl get catalogitem grafana-demo --catalog default -o yaml
 ```
 
-## Fleet (Ansible)
+## Fleet (OS + Grafana)
 
-After the catalog item exists, apply a demo fleet from the Ansible controller (no `flightctl apply` on the gateway):
+Full procedure (Phase A without a device, Phase B when you enroll one): **[README.fleets-basic.md](README.fleets-basic.md)**. Canonical manifest: [`fleets/lab-testbuild1-grafana.yaml`](fleets/lab-testbuild1-grafana.yaml).
+
+After **`testbuild1`** and **`grafana-demo`** exist in the catalog, apply the fleet from the Ansible controller (no `flightctl apply` on the gateway):
 
 ```bash
 cd ansible
 ansible-playbook playbooks/rhem-fleet-grafana-demo.yml --ask-vault-pass
 ```
 
-Variables: `inventory/group_vars/rhem_servers/rhem_fleet_grafana.yml`. The manifest shape matches the manual example below (`appType` must be `quadlet`).
+Variables: `inventory/group_vars/rhem_servers/rhem_fleet_grafana.yml`. The application block matches the manual example below (`appType` must be `quadlet`).
 
 ## Manual fleet manifest (reference)
 
@@ -123,4 +125,4 @@ Devices need outbound access to pull `docker.io/grafana/grafana:latest` unless y
 
 - **`latest` tag**: fine for a home lab; pin a tag or digest for reproducibility.
 - **Grafana login**: default UI credentials are `admin` / `admin` (change on first login).
-- **Related docs in this repo**: [ansible/README.md](ansible/README.md) (API playbooks), [README.image-builds-advanced.md](README.image-builds-advanced.md), [README.scratchpad.md](README.scratchpad.md).
+- **Related docs in this repo**: [README.fleets-basic.md](README.fleets-basic.md), [ansible/README.md](ansible/README.md) (API playbooks), [README.image-builds-advanced.md](README.image-builds-advanced.md), [README.scratchpad.md](README.scratchpad.md).

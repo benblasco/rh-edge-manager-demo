@@ -114,14 +114,12 @@
       flightctl_password: "{{ rhem_flightctl_connection.flightctl_password }}"
       flightctl_validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
     flightctl.core.flightctl_image_builder:
-      flightctl_host: "{{ rhem_flightctl_connection.flightctl_host }}"
-      flightctl_username: "{{ rhem_flightctl_connection.flightctl_username }}"
-      flightctl_password: "{{ rhem_flightctl_connection.flightctl_password }}"
+      flightctl_host: "{{ rhem_flightctl_image_builder_host }}"
+      flightctl_token: "{{ rhem_flightctl_bearer_token }}"
       flightctl_validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
     flightctl.core.flightctl_image_builder_info:
-      flightctl_host: "{{ rhem_flightctl_connection.flightctl_host }}"
-      flightctl_username: "{{ rhem_flightctl_connection.flightctl_username }}"
-      flightctl_password: "{{ rhem_flightctl_connection.flightctl_password }}"
+      flightctl_host: "{{ rhem_flightctl_image_builder_host }}"
+      flightctl_token: "{{ rhem_flightctl_bearer_token }}"
       flightctl_validate_certs: "{{ rhem_flightctl_connection.flightctl_validate_certs }}"
 
   pre_tasks:
@@ -147,6 +145,25 @@
           Set rhem_pam_password in inventory/group_vars/rhem_servers/vault.yml.
       tags: [always]
 
+    - name: Require vault OIDC refresh token for Image Builder API
+      ansible.builtin.assert:
+        that:
+          - rhem_flightctl_refresh_token is defined
+          - rhem_flightctl_refresh_token | length > 0
+          - rhem_flightctl_refresh_token != 'CHANGEME'
+        fail_msg: >-
+          Set rhem_flightctl_refresh_token in vault.yml (OIDC refresh token for
+          flightctl_image_builder* modules). See ansible/README.md.
+      tags: [always]
+
+    - name: Obtain bearer token for Image Builder API from refresh token
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../tasks/rhem_flightctl_bearer_from_refresh.yml"
+        apply:
+          tags:
+            - always
+      tags: [always]
+
     - name: Assert promotion is not enabled without build completion wait
       ansible.builtin.assert:
         that:
@@ -154,6 +171,15 @@
         fail_msg: >-
           Set rhem_imagebuild_wait_complete: true when rhem_imagebuild_promotion_enabled is true,
           or run a build to completion before the promotion tag.
+      tags: [always]
+
+    - name: Assert QCOW2 catalog promotion requires ImageExport
+      ansible.builtin.assert:
+        that:
+          - not (rhem_imagebuild_promotion_export_qcow2 | bool) or (rhem_imageexport_enabled | bool)
+        fail_msg: >-
+          Set rhem_imageexport_enabled: true when rhem_imagebuild_promotion_export_qcow2 is true
+          (ImagePromotion exportFormats needs a completed ImageExport).
       tags: [always]
 
   tasks:
@@ -177,6 +203,9 @@
     - name: Apply ImageBuild via API
       ansible.builtin.include_tasks:
         file: "{{ playbook_dir }}/../tasks/rhem_flightctl_render_and_apply.yml"
+        apply:
+          tags:
+            - imagebuild
       vars:
         rhem_flightctl_apply_template: "{{ playbook_dir }}/../templates/imagebuilds/imagebuild.yaml.j2"
       when: rhem_imagebuild_apply_build | bool
@@ -185,10 +214,47 @@
     - name: Wait for ImageBuild completion
       ansible.builtin.include_tasks:
         file: "{{ playbook_dir }}/../tasks/rhem_flightctl_wait_imagebuild.yml"
+        apply:
+          tags:
+            - imagebuild
       when:
         - rhem_imagebuild_apply_build | bool
         - rhem_imagebuild_wait_complete | bool
       tags: [imagebuild]
+
+    - name: Apply ImageExport via Image Builder API
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../tasks/rhem_flightctl_render_and_apply.yml"
+        apply:
+          tags:
+            - imageexport
+      vars:
+        rhem_flightctl_apply_template: "{{ playbook_dir }}/../templates/imagebuilds/imageexport.yaml.j2"
+      when: rhem_imageexport_apply | bool
+      tags: [imageexport]
+
+    - name: Wait for ImageExport completion
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../tasks/rhem_flightctl_wait_imageexport.yml"
+        apply:
+          tags:
+            - imageexport
+      when:
+        - rhem_imageexport_apply | bool
+        - rhem_imageexport_wait_complete | bool
+      tags: [imageexport]
+
+    - name: Download QCOW2 from ImageExport to controller
+      flightctl.core.flightctl_image_builder_info:
+        kind: ImageExport
+        name: "{{ rhem_imageexport_name }}"
+        download: true
+        dest: "{{ rhem_imageexport_download_path }}"
+      when:
+        - rhem_imageexport_download_enabled | bool
+        - rhem_imageexport_apply | bool
+      no_log: true
+      tags: [imageexport]
 
     - name: Assert ImageBuild completed before catalog promotion
       flightctl.core.flightctl_image_builder_info:
@@ -212,6 +278,35 @@
       when:
         - rhem_imagebuild_apply_promotion | bool
         - not rhem_imagebuild_wait_complete | bool
+      tags: [promotion]
+
+    - name: Check ImageExport status before promotion with disk formats
+      flightctl.core.flightctl_image_builder_info:
+        kind: ImageExport
+        name: "{{ rhem_imageexport_name }}"
+      register: rhem_imageexport_precheck
+      changed_when: false
+      when:
+        - rhem_imagebuild_apply_promotion | bool
+        - rhem_imagebuild_export_formats | length > 0
+      tags: [promotion]
+
+    - name: Assert ImageExport completed before catalog promotion with QCOW2
+      ansible.builtin.assert:
+        that:
+          - rhem_imageexport_precheck.result.data | default([]) | length > 0
+          - >-
+            (
+              rhem_imageexport_precheck.result.data[0].status.conditions
+              | selectattr('type', 'equalto', 'Ready')
+              | list | first
+            ).reason == 'Completed'
+        fail_msg: >-
+          ImageExport {{ rhem_imageexport_name }} must be Completed before promotion
+          with exportFormats {{ rhem_imagebuild_export_formats }}.
+      when:
+        - rhem_imagebuild_apply_promotion | bool
+        - rhem_imagebuild_export_formats | length > 0
       tags: [promotion]
 
     - name: Apply ImagePromotion to Software Catalog via API
@@ -244,6 +339,15 @@
       failed_when: false
       tags: [verify]
 
+    - name: Get ImageExport when QCOW2 export enabled
+      flightctl.core.flightctl_image_builder_info:
+        kind: ImageExport
+        name: "{{ rhem_imageexport_name }}"
+      register: rhem_flightctl_imageexport
+      failed_when: false
+      when: rhem_imageexport_enabled | bool
+      tags: [verify]
+
     - name: Get ImagePromotion when catalog promotion enabled
       flightctl.core.flightctl_resource_info:
         kind: ImagePromotion
@@ -266,6 +370,7 @@
       ansible.builtin.debug:
         msg:
           - "ImageBuild: {{ rhem_imagebuild_name }} → {{ rhem_built_registry_host }}/{{ rhem_imagebuild_dest_image }}:{{ rhem_imagebuild_dest_tag }}"
+          - "ImageExport QCOW2: {{ rhem_imageexport_name if rhem_imageexport_enabled | bool else 'disabled' }}"
           - "Catalog promotion: {{ 'enabled (' ~ rhem_imagepromotion_name ~ ')' if rhem_imagebuild_promotion_enabled | bool else 'disabled' }}"
           - "Repositories in API: {{ rhem_flightctl_repositories.result.data | default([]) | map(attribute='metadata') | map(attribute='name') | list }}"
       tags: [verify]
