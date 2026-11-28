@@ -25,3 +25,9 @@ spec:
             channel: testing
           ports:
             - "3000:3000"
+      config:
+        - name: lab-testbuild1-grafana-motd
+          gitRef:
+            repository: rh-edge-manager-demo-git
+            targetRevision: main
+            path: fleet/lab-testbuild1-grafana

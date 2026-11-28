@@ -1,0 +1,7 @@
+apiVersion: flightctl.io/v1alpha1
+kind: Repository
+metadata:
+  name: rh-edge-manager-demo-git
+spec:
+  type: git
+  url: https://github.com/benblasco/rh-edge-manager-demo.git
