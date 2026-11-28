@@ -30,4 +30,4 @@ spec:
           gitRef:
             repository: rh-edge-manager-demo-git
             targetRevision: main
-            path: fleet/lab-testbuild1-grafana
+            path: fleet-host-configs/lab-testbuild1-grafana
